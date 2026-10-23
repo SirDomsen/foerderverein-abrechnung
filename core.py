@@ -4,7 +4,7 @@ Plattformunabhängig für Windows, Web (NiceGUI/FastAPI) und Mobile.
 """
 
 __app_name__ = "Förderverein Grundschule – Abrechnungs-Manager"
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 import os
 import re
@@ -51,28 +51,34 @@ FILE_ENTWURF = os.path.join(CACHE_DIR, "aktueller_entwurf.json")
 class FerienManagerBW:
     """Verwaltet BW-Schulferien mit Online-API, JSON-Cache und Offline-Fallback."""
     CACHE_FILE = os.path.join(CACHE_DIR, "ferien_cache_bw.json")
-    API_URL = "https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-BW"
+    API_URLS = [
+        "https://ferien-api.de/api/v1/holidays/BW",
+        "https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-BW"
+    ]
 
     def __init__(self):
         self.ferien_liste: List[Dict[str, Any]] = []
         self._ferien_laden()
 
     def _ferien_laden(self) -> None:
-        # 1. Online-Abruf
-        try:
-            req = urllib.request.Request(
-                self.API_URL,
-                headers={"User-Agent": f"FoerdervereinAbrechnung/{__version__}"}
-            )
-            with urllib.request.urlopen(req, timeout=3.5) as resp:
-                if resp.status == 200:
-                    daten = json.loads(resp.read().decode("utf-8"))
-                    self._parse_api_daten(daten)
-                    with open(self.CACHE_FILE, "w", encoding="utf-8") as f:
-                        json.dump(daten, f, ensure_ascii=False, indent=2)
-                    return
-        except Exception:
-            pass
+        # 1. Online-Abruf über primäre und Fallback-APIs
+        for url in self.API_URLS:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": f"FoerdervereinAbrechnung/{__version__}"}
+                )
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                    if resp.status == 200:
+                        daten = json.loads(resp.read().decode("utf-8"))
+                        if daten and isinstance(daten, list):
+                            self._parse_api_daten(daten)
+                            if self.ferien_liste:
+                                with open(self.CACHE_FILE, "w", encoding="utf-8") as f:
+                                    json.dump(daten, f, ensure_ascii=False, indent=2)
+                                return
+            except Exception:
+                continue
 
         # 2. Lokaler Cache
         if os.path.exists(self.CACHE_FILE):
@@ -80,21 +86,42 @@ class FerienManagerBW:
                 with open(self.CACHE_FILE, "r", encoding="utf-8") as f:
                     daten = json.load(f)
                     self._parse_api_daten(daten)
-                    return
+                    if self.ferien_liste:
+                        return
             except Exception:
                 pass
 
-        # 3. Offline-Fallback
+        # 3. Offline-Fallback (Lückenlose BW-Ferienliste 2024–2028)
         self._lade_fallback_daten()
 
     def _parse_api_daten(self, raw_daten: List[Dict[str, Any]]) -> None:
         self.ferien_liste = []
         for item in raw_daten:
             try:
-                start = datetime.strptime(item.get("startDate", ""), "%Y-%m-%d").date()
-                end = datetime.strptime(item.get("endDate", ""), "%Y-%m-%d").date()
-                name_list = item.get("name", [])
-                name = name_list[0].get("text", "Ferien") if name_list else "Schulferien"
+                # Unterstützt sowohl openholidaysapi (startDate/endDate) als auch ferien-api.de (start/end)
+                s_val = item.get("startDate") or item.get("start") or ""
+                e_val = item.get("endDate") or item.get("end") or ""
+                if not s_val or not e_val:
+                    continue
+                start = datetime.strptime(str(s_val)[:10], "%Y-%m-%d").date()
+                end = datetime.strptime(str(e_val)[:10], "%Y-%m-%d").date()
+
+                name = "Schulferien"
+                name_field = item.get("name")
+                if isinstance(name_field, list) and name_field:
+                    name = name_field[0].get("text", "Schulferien")
+                elif isinstance(name_field, str):
+                    # Bei ferien-api.de kommen englische Namen wie 'autumn', 'christmas'
+                    de_names = {
+                        "autumn": "Herbstferien",
+                        "christmas": "Weihnachtsferien",
+                        "easter": "Osterferien",
+                        "pentecost": "Pfingstferien",
+                        "summer": "Sommerferien",
+                        "winter": "Winterferien"
+                    }
+                    name = de_names.get(name_field.lower(), name_field.capitalize())
+
                 self.ferien_liste.append({"name": name, "start": start, "end": end})
             except Exception:
                 continue
@@ -102,12 +129,30 @@ class FerienManagerBW:
 
     def _lade_fallback_daten(self) -> None:
         fallback_eintraege = [
+            # Schuljahr 2024/2025
+            ("Herbstferien 2024", "2024-10-28", "2024-10-31"),
+            ("Weihnachtsferien 2024/25", "2024-12-23", "2025-01-04"),
+            ("Osterferien 2025", "2025-04-14", "2025-04-26"),
+            ("Pfingstferien 2025", "2025-06-10", "2025-06-20"),
+            ("Sommerferien 2025", "2025-07-31", "2025-09-13"),
+            # Schuljahr 2025/2026
+            ("Herbstferien 2025", "2025-10-27", "2025-10-30"),
+            ("Weihnachtsferien 2025/26", "2025-12-22", "2026-01-05"),
+            ("Osterferien 2026", "2026-03-30", "2026-04-10"),
+            ("Pfingstferien 2026", "2026-05-26", "2026-06-05"),
             ("Sommerferien 2026", "2026-07-30", "2026-09-12"),
+            # Schuljahr 2026/2027
             ("Herbstferien 2026", "2026-10-26", "2026-10-31"),
             ("Weihnachtsferien 2026/27", "2026-12-23", "2027-01-09"),
             ("Osterferien 2027", "2027-03-25", "2027-04-03"),
             ("Pfingstferien 2027", "2027-05-18", "2027-05-29"),
             ("Sommerferien 2027", "2027-07-29", "2027-09-11"),
+            # Schuljahr 2027/2028
+            ("Herbstferien 2027", "2027-11-02", "2027-11-06"),
+            ("Weihnachtsferien 2027/28", "2027-12-23", "2028-01-08"),
+            ("Osterferien 2028", "2028-04-10", "2028-04-21"),
+            ("Pfingstferien 2028", "2028-06-06", "2028-06-16"),
+            ("Sommerferien 2028", "2028-07-27", "2028-09-09"),
         ]
         self.ferien_liste = []
         for name, s, e in fallback_eintraege:
@@ -249,6 +294,74 @@ def pruefe_wochenende(pruef_datum: date) -> Optional[str]:
     elif pruef_datum.weekday() == 6:
         return "Sonntag"
     return None
+
+
+def pruefe_kursdatum_plausibilitaet(kurs_datum: date, einreich_datum: Optional[date] = None) -> List[Dict[str, str]]:
+    """
+    Validiert das Kursdatum anhand der BW-Ferien und Schuljahresregeln:
+    1. Harte Warnung: Einreichung außerhalb des laufenden Schuljahrs (Abrechnungsfrist verpasst).
+    2. Weiche Warnung: Einreichung nach Ablauf des regulären Abrechnungszeitraums (Ferienende bis Ferienende), aber noch im laufenden Schuljahr.
+    3. Ferien-Warnung: Kurstag fällt direkt in Schulferien (BW).
+    4. Wochenend-Warnung: Kurstag fällt auf Samstag/Sonntag.
+
+    Rückgabe: Liste von Warnungs-Dicts: [{"level": "hart"|"weich", "titel": "...", "nachricht": "..."}]
+    """
+    heute = einreich_datum or date.today()
+    warnungen: List[Dict[str, str]] = []
+
+    kurs_sj = ermittle_schuljahr(kurs_datum)
+    aktuelles_sj = ermittle_schuljahr(heute)
+
+    # 1. Schuljahr-Prüfung: Liegt der Termin in einem vergangenen Schuljahr? -> HARTE WARNUNG
+    if kurs_datum < heute and kurs_sj != aktuelles_sj:
+        warnungen.append({
+            "level": "hart",
+            "titel": "Abrechnungszeitraum verpasst (Schuljahr abgelaufen)",
+            "nachricht": (
+                f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) liegt im vorherigen Schuljahr ({kurs_sj}).\n"
+                f"Die reguläre Frist zur Abrechnung im laufenden Schuljahr ({aktuelles_sj}) ist bereits abgelaufen.\n\n"
+                f"Eine Abrechnung erfordert die ausdrückliche Sondergenehmigung des Vorstands."
+            )
+        })
+
+    # 2. Abrechnungszeitraum: Grundsätzlich Ferienende bis Ferienende -> WEICHE WARNUNG
+    p_start, p_ende, p_name = ferien_mgr.ermittle_abrechnungszeitraum(kurs_datum)
+    if p_ende and heute > p_ende and kurs_sj == aktuelles_sj:
+        warnungen.append({
+            "level": "weich",
+            "titel": "Abrechnungszeitraum überschritten (Weiche Warnung)",
+            "nachricht": (
+                f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) gehört zum Abrechnungszeitraum '{p_name}'.\n"
+                f"Das reguläre Zeitfenster endete am {p_ende.strftime('%d.%m.%Y')}.\n\n"
+                f"Da der Termin noch im laufenden Schuljahr ({aktuelles_sj}) liegt, kann die Abrechnung eingereicht werden."
+            )
+        })
+
+    # 3. Liegt der Kurstag selbst in den Ferien?
+    ferien_name = ferien_mgr.pruefe_in_ferien(kurs_datum)
+    if ferien_name:
+        warnungen.append({
+            "level": "weich",
+            "titel": "Kurstag in den Ferien",
+            "nachricht": (
+                f"Der Kurstag ({kurs_datum.strftime('%d.%m.%Y')}) liegt in den {ferien_name} (BW).\n\n"
+                f"Handelt es sich um ein Ferienprogramm oder einen Sondertermin?"
+            )
+        })
+
+    # 4. Liegt der Kurstag am Wochenende?
+    wochenend_tag = pruefe_wochenende(kurs_datum)
+    if wochenend_tag:
+        warnungen.append({
+            "level": "weich",
+            "titel": "Kurstag am Wochenende",
+            "nachricht": (
+                f"Der Kurstag ({kurs_datum.strftime('%d.%m.%Y')}) fällt auf einen {wochenend_tag}.\n\n"
+                f"Handelt es sich um eine Wochenend-Veranstaltung?"
+            )
+        })
+
+    return warnungen
 
 
 def validiere_kurs_dauer(dauer_str: str) -> Tuple[bool, float, Optional[str]]:
@@ -484,7 +597,7 @@ class InteractiveTextField(Flowable):
     Platypus Flowable für interaktive PDF-Formularfelder (AcroForms).
     Ermöglicht direktes Ausfüllen per Tastatur in Adobe Acrobat, Edge, Chrome etc.
     """
-    def __init__(self, name: str, width: float = 100, height: float = 14, default: str = "", tooltip: str = "", border_style: str = "solid"):
+    def __init__(self, name: str, width: float = 100, height: float = 16, default: str = "", tooltip: str = "", border_style: str = "solid"):
         super().__init__()
         self.name = name
         self.width = width
@@ -497,26 +610,33 @@ class InteractiveTextField(Flowable):
         return self.width, self.height
 
     def draw(self):
+        # 1. Visueller weißer Eingabekasten mit sichtbarem Rahmen
+        self.canv.saveState()
+        self.canv.setStrokeColor(colors.HexColor("#94a3b8"))
+        self.canv.setFillColor(colors.HexColor("#ffffff"))
+        self.canv.setLineWidth(0.75)
+        self.canv.roundRect(0, 0, self.width, self.height, 2, fill=1, stroke=1)
+        self.canv.restoreState()
+
+        # 2. Interaktives AcroForm-Feld an den echten absoluten Seitenkoordinaten platzieren
         try:
+            abs_x, abs_y = self.canv.absolutePosition(0, 0)
             self.canv.acroForm.textfield(
                 name=self.name,
                 tooltip=self.tooltip,
-                x=0,
-                y=0,
+                x=abs_x,
+                y=abs_y,
                 width=self.width,
                 height=self.height,
                 value=self.default,
                 borderStyle=self.border_style,
-                borderColor=colors.HexColor("#94a3b8"),
+                borderColor=colors.HexColor("#64748b"),
                 fillColor=colors.HexColor("#ffffff"),
                 textColor=colors.HexColor("#0f172a"),
                 fontSize=8.5
             )
         except Exception:
-            # Fallback bei Viewern ohne AcroForm-Support: Saubere Unterstrichlinie
-            self.canv.setStrokeColor(colors.HexColor("#94a3b8"))
-            self.canv.setLineWidth(0.75)
-            self.canv.line(0, 1, self.width, 1)
+            pass
 
 
 # ==============================================================================
@@ -797,19 +917,19 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         [
             Table([
                 [Paragraph("Angewiesener Betrag:", c_val),
-                 InteractiveTextField("kassenwart_betrag", width=75, height=14, tooltip="Überweisener Betrag in €"),
+                 InteractiveTextField("kassenwart_betrag", width=75, height=16, tooltip="Überweisener Betrag in €"),
                  Paragraph("€", c_val)]
             ], colWidths=[105, 80, 15]),
             Table([
                 [Paragraph("Überwiesen am:", c_val),
-                 InteractiveTextField("kassenwart_datum", width=85, height=14, tooltip="Überweisungsdatum (TT.MM.JJJJ)")]
+                 InteractiveTextField("kassenwart_datum", width=85, height=16, tooltip="Überweisungsdatum (TT.MM.JJJJ)")]
             ], colWidths=[75, 90])
         ],
         [
             Paragraph("<font color='#64748b' size='7'><i>(Betrag kann bei Abschlägen / Korrekturen vom PDF-Gesamtbetrag abweichen)</i></font>", styles['Normal']),
             Table([
                 [Paragraph("Kassenwart / Visum:", c_label),
-                 InteractiveTextField("kassenwart_signatur", width=120, height=14, tooltip="Datum, Unterschrift oder Namenskürzel des Kassenwarts")]
+                 InteractiveTextField("kassenwart_signatur", width=120, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Kassenwarts")]
             ], colWidths=[90, 125])
         ]
     ]

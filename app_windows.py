@@ -521,10 +521,18 @@ class WindowsAbrechnungsApp(ctk.CTk):
         leiter_name = self.entry_leiter.get().strip() or "Kursleiter"
 
         periode_text = "–"
+        warn_text = ""
         parsed_kd, _ = core.parse_datum(kurs_datum_str, "Kursdatum")
         if parsed_kd:
             _, _, p_name = core.ferien_mgr.ermittle_abrechnungszeitraum(parsed_kd)
             periode_text = p_name
+            k_warns = core.pruefe_kursdatum_plausibilitaet(parsed_kd)
+            if k_warns:
+                for w in k_warns:
+                    icon = "⛔" if w["level"] == "hart" else "⚠️"
+                    warn_text += f"\n  {icon} {w['titel']}"
+            else:
+                warn_text = "\n  ✓ Im regulären Abrechnungszeitraum"
 
         iban_str = self.entry_iban.get().strip()
         if iban_str:
@@ -547,7 +555,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
             f" KURS:         {kurs_titel}\n"
             f" Gruppe/Klasse: {gruppe}\n"
             f" Termin:       {kurs_datum_str}\n"
-            f" Periode (BW): {periode_text}\n"
+            f" Periode (BW): {periode_text}{warn_text}\n"
             f" IBAN:         {iban_status}\n"
             f" ──> Überweisungs-Ref: {kurs_id} {leiter_name}\n"
             f" ──> Fester Dateiname: {fester_name}\n"
@@ -627,29 +635,25 @@ class WindowsAbrechnungsApp(ctk.CTk):
             messagebox.showwarning("Plausibilitätsprüfung (Kursdauer)", dauer_err)
             return
 
-        # 7. Wochenend-Warnung
-        wochenend_tag = core.pruefe_wochenende(kd_parsed)
-        if wochenend_tag:
-            msg = (
-                f"Hinweis zum Wochentag:\n"
-                f"Der Kurstag ({kd_parsed.strftime('%d.%m.%Y')}) fällt auf einen {wochenend_tag}.\n\n"
-                f"Handelt es sich um eine Sonderveranstaltung am Wochenende?\n"
-                f"Möchtest du trotzdem fortfahren?"
-            )
-            if not messagebox.askyesno("Wochenend-Termin", msg):
-                return
-
-        # 8. Ferien-Warnung
-        ferien_name = core.ferien_mgr.pruefe_in_ferien(kd_parsed)
-        if ferien_name:
-            msg = (
-                f"Hinweis zu Schulferien in BW:\n"
-                f"Der Kurstag ({kd_parsed.strftime('%d.%m.%Y')}) liegt in den {ferien_name}.\n\n"
-                f"Handelt es sich um ein Ferienprogramm / Sondertermin?\n"
-                f"Möchtest du die Abrechnung trotzdem fortsetzen?"
-            )
-            if not messagebox.askyesno("Kurstag in den Ferien", msg):
-                return
+        # 7. Plausibilitätsprüfungen zum Kurstermin (Schuljahr, Ferienende-Abrechnungsfenster, Ferien, Wochentag)
+        warnungen = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
+        for w in warnungen:
+            if w["level"] == "hart":
+                msg = (
+                    f"⛔ HARTE WARNUNG: {w['titel']}!\n\n"
+                    f"{w['nachricht']}\n\n"
+                    f"Möchtest du die Abrechnung trotzdem fortsetzen?"
+                )
+                if not messagebox.askyesno("Abrechnungsfrist verpasst", msg, icon="warning"):
+                    return
+            else:
+                msg = (
+                    f"⚠️ {w['titel']}:\n\n"
+                    f"{w['nachricht']}\n\n"
+                    f"Möchtest du fortfahren?"
+                )
+                if not messagebox.askyesno(w["titel"], msg, icon="question"):
+                    return
 
         # Fester Dateiname für automatisiertes Einlesen durch Kassenwart-App
         fester_dateiname = core.generiere_standard_dateinamen(

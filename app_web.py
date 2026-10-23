@@ -278,7 +278,18 @@ def index():
                     summen = core.berechne_summen(kurs["dauer"], stamm["satz"], belege)
 
                     kd_parsed, _ = core.parse_datum(kurs["datum"] or "", "Kursdatum")
-                    _, _, p_name = core.ferien_mgr.ermittle_abrechnungszeitraum(kd_parsed) if kd_parsed else (None, None, "–")
+                    periode_text = "–"
+                    warn_status_text = ""
+                    if kd_parsed:
+                        _, _, p_name = core.ferien_mgr.ermittle_abrechnungszeitraum(kd_parsed)
+                        periode_text = p_name
+                        warns = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
+                        if warns:
+                            for w in warns:
+                                icon = "⛔" if w["level"] == "hart" else "⚠️"
+                                warn_status_text += f"\n  {icon} {w['titel']}"
+                        else:
+                            warn_status_text = "\n  ✓ Im regulären Abrechnungszeitraum"
 
                     iban_val = (stamm.get("iban") or "").strip()
                     if iban_val:
@@ -303,7 +314,7 @@ def index():
                         f"KURS:         {kurs['titel'] or '–'}",
                         f"KLASSE:       {kurs['ag'] or '–'}",
                         f"TERMIN:       {kurs['datum'] or '–'}",
-                        f"PERIODE (BW): {p_name}",
+                        f"PERIODE (BW): {periode_text}{warn_status_text}",
                         f"IBAN:         {iban_text}",
                         f"──> Ref-Zweck: {kid_anzeige} {leiter_anzeige}",
                         f"──> Dateiname: {fester_name}",
@@ -360,15 +371,12 @@ def index():
                         ui.notify(f"Kursdauer-Fehler: {dauer_err}", color='negative')
                         return
 
-                    # Wochenend-Warnung
-                    wochenend_tag = core.pruefe_wochenende(kd_parsed)
-                    if wochenend_tag:
-                        ui.notify(f"Hinweis: Der Kurstag fällt auf einen {wochenend_tag}.", color='warning')
-
-                    # Ferien-Warnung
-                    ferien_name = core.ferien_mgr.pruefe_in_ferien(kd_parsed)
-                    if ferien_name:
-                        ui.notify(f"Hinweis: Kurstag liegt in den {ferien_name} (BW).", color='warning')
+                    # Kursdatum Plausibilität (Schuljahr, Ferienende-Fenster, Ferien, Wochentag)
+                    warnungen = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
+                    for w in warnungen:
+                        color = 'negative' if w["level"] == "hart" else 'warning'
+                        icon = "⛔ " if w["level"] == "hart" else "⚠️ "
+                        ui.notify(f"{icon}{w['titel']}: {w['nachricht'].splitlines()[0]}", color=color, timeout=7000)
 
                     # Fester Dateiname nach Kassenwart-Schema
                     pdf_filename = core.generiere_standard_dateinamen(
