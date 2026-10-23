@@ -4,7 +4,7 @@ Plattformunabhängig für Windows, Web (NiceGUI/FastAPI) und Mobile.
 """
 
 __app_name__ = "Förderverein Grundschule – Abrechnungs-Manager"
-__version__ = "0.6.1"
+__version__ = "1.0.0"
 
 import os
 import re
@@ -576,14 +576,44 @@ def generiere_standard_dateinamen(kurs_datum_str: str, kurs_titel: str, kursleit
 # ==============================================================================
 # 3. AUTOSAVE & PERSISTENZ (JSON)
 # ==============================================================================
+DEFAULT_STUNDENSATZ = 21.00
+DEFAULT_ADMIN_PIN = "4711"
+FILE_SETTINGS = os.path.join(CACHE_DIR, "settings.json")
+
+
+def lade_einstellungen() -> Dict[str, Any]:
+    """Lädt die geschützten Vereinseinstellungen (Stundensatz und Admin-PIN)."""
+    daten = {"stundensatz": DEFAULT_STUNDENSATZ, "admin_pin": DEFAULT_ADMIN_PIN}
+    if os.path.exists(FILE_SETTINGS):
+        try:
+            with open(FILE_SETTINGS, "r", encoding="utf-8") as f:
+                daten.update(json.load(f))
+        except Exception:
+            pass
+    return daten
+
+
+def speichere_einstellungen(daten: Dict[str, Any]) -> None:
+    """Speichert die geschützten Vereinseinstellungen ab."""
+    try:
+        with open(FILE_SETTINGS, "w", encoding="utf-8") as f:
+            json.dump(daten, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def lade_stammdaten() -> Dict[str, str]:
-    daten = {"leiter": "", "anschrift": "", "telefon": "", "iban": "", "satz": "20.00"}
+    einst = lade_einstellungen()
+    stundensatz_str = f"{float(einst.get('stundensatz', DEFAULT_STUNDENSATZ)):.2f}"
+    daten = {"leiter": "", "anschrift": "", "telefon": "", "iban": "", "satz": stundensatz_str}
     if os.path.exists(FILE_STAMM):
         try:
             with open(FILE_STAMM, "r", encoding="utf-8") as f:
                 daten.update(json.load(f))
         except Exception:
             pass
+    # Stundensatz immer aus den geschützten Einstellungen beziehen (nicht manipulierbar)
+    daten["satz"] = stundensatz_str
     return daten
 
 
@@ -743,7 +773,7 @@ class InteractiveTextField(Flowable):
 def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: List[Dict[str, Any]], zielpfad: str) -> None:
     """Rendert Deckblatt und hängt alle hinterlegten Belege (Bilder oder PDFs) hinten an."""
     deckblatt_temp = os.path.join(CACHE_DIR, "temp_deckblatt.pdf")
-    doc = SimpleDocTemplate(deckblatt_temp, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    doc = SimpleDocTemplate(deckblatt_temp, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=24, bottomMargin=24)
     styles = getSampleStyleSheet()
 
     FARBE_PRIM = colors.HexColor("#1e3d59")
@@ -943,7 +973,7 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_std)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 8))
 
     # 2. Auslagen (Gesamtbreite: 523pt)
     elements.append(Paragraph("<b>2. Auslagen für Kursmaterialien</b>", styles['Heading3']))
@@ -985,13 +1015,13 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         ('GRID', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
         ('SPAN', (0, -1), (2, -1)),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
         ('LEFTPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_bel)
-    elements.append(Spacer(1, 14))
+    elements.append(Spacer(1, 8))
 
     # 3. Summe & Buchungs-Referenz für Überweisung (Gesamtbreite: 523pt)
     gesamt = summen["gesamt"]
@@ -1104,42 +1134,48 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         [
             Table([
                 [Paragraph("Geprüft & genehmigt am:", c_val),
-                 InteractiveTextField("vorstand_datum", width=80, height=16, tooltip="Prüfdatum des Vorstands (TT.MM.JJJJ)")],
-                [Paragraph("Vorstand / Visum:", c_label),
-                 InteractiveTextField("vorstand_signatur", width=110, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Vorstands")]
-            ], colWidths=[120, 115]),
+                 InteractiveTextField("vorstand_datum", width=85, height=16, tooltip="Prüfdatum des Vorstands (TT.MM.JJJJ)")],
+            ], colWidths=[125, 115]),
             Table([
-                [Paragraph("<b>Notizen / Prüfvermerk Vorstand:</b> <font size='6.5' color='#64748b'><i>(z. B. Belegkürzungen, fehlende Beträge)</i></font>", styles['Normal'])],
-                [InteractiveTextField("vorstand_notizen", width=275, height=20, tooltip="Notizen des Vorstands zu Belegen oder Betragskürzungen")]
-            ], colWidths=[275])
+                [Paragraph("Vorstand / Visum:", c_label),
+                 InteractiveTextField("vorstand_signatur", width=120, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Vorstands")]
+            ], colWidths=[110, 133])
+        ],
+        [
+            Table([
+                [Paragraph("<b>Notizen / Prüfvermerk:</b>", c_label),
+                 InteractiveTextField("vorstand_notizen", width=360, height=22, tooltip="Notizen / Prüfvermerk des Vorstands (z. B. Belegkürzungen, fehlende Beträge)")]
+            ], colWidths=[140, 370]),
+            ""
         ]
-    ], colWidths=[240, 283])
+    ], colWidths=[245, 278])
     t_box_vorstand.setStyle(TableStyle([
         ('SPAN', (0, 0), (1, 0)),
+        ('SPAN', (0, 2), (1, 2)),
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
         ('BOX', (0, 0), (-1, -1), 0.65, colors.HexColor("#94a3b8")),
         ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#e2e8f0")),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_box_vorstand)
-    elements.append(Spacer(1, 5))
+    elements.append(Spacer(1, 7))
 
     # KASTEN 3: Kassenwart (Zahlungsanweisung, Ausführung & Notizen)
     kw_box_data = [
         [
-            Paragraph("<b>🏦 3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b> (digital ausfüllbar)", c_val_bold),
+            Paragraph("<b>🏦 3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b>", c_val_bold),
             ""
         ],
         [
             Table([
                 [Paragraph("Angewiesener Betrag:", c_val),
                  InteractiveTextField("kassenwart_betrag", width=70, height=16, tooltip="Überwiesener Betrag in €"),
-                 Paragraph("€", c_val)],
-                [Paragraph("<font color='#64748b' size='6.5'><i>(bei Kürzung abweichend)</i></font>", styles['Normal']), "", ""]
+                 Paragraph("€", c_val)]
             ], colWidths=[110, 75, 15]),
             Table([
                 [Paragraph("Überwiesen am:", c_val),
@@ -1150,13 +1186,13 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         ],
         [
             Table([
-                [Paragraph("<b>Buchungsvermerk / Notizen Kassenwart:</b>", c_label),
-                 InteractiveTextField("kassenwart_notizen", width=335, height=16, tooltip="Buchungsvermerk / Notiz Kassenwart (z. B. Kostenstelle, Differenzbegründung)")]
-            ], colWidths=[170, 345]),
+                [Paragraph("<b>Notizen / Buchungsvermerk:</b>", c_label),
+                 InteractiveTextField("kassenwart_notizen", width=360, height=22, tooltip="Notizen / Buchungsvermerk des Kassenwarts (z. B. Kostenstelle, Differenzbegründung)")]
+            ], colWidths=[140, 370]),
             ""
         ]
     ]
-    t_kw = Table(kw_box_data, colWidths=[220, 303])
+    t_kw = Table(kw_box_data, colWidths=[205, 318])
     t_kw.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f0fdf4")),
         ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#16a34a")),
@@ -1165,8 +1201,8 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#bbf7d0")),
         ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#dcfce7")),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))

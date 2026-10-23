@@ -68,9 +68,71 @@ def index():
                 ui.input(placeholder='DE89 3704 0044 0532 0130 00', on_change=lambda e: (stamm.update(iban=e.value), autosave(), update_summary())) \
                     .bind_value(stamm, 'iban').classes('w-full')
 
-                ui.label("Vereinbarter Stundensatz (€/h):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
-                ui.input(placeholder='z. B. 20.00', on_change=lambda e: (stamm.update(satz=e.value), autosave(), update_summary())) \
-                    .bind_value(stamm, 'satz').classes('w-full')
+                def open_admin_settings_modal():
+                    einst = core.lade_einstellungen()
+                    with ui.dialog() as settings_dialog, ui.card().classes('p-5 max-w-md w-full'):
+                        ui.label("⚙️ Vereinseinstellungen (Admin)").classes('text-lg font-bold text-primary')
+                        ui.label("Fester Stundensatz für alle Kursleiter und Admin-PIN:").classes('text-xs text-slate-600 mb-3')
+
+                        ui.label("Standard-Stundensatz (€/h):").classes('text-xs font-semibold text-slate-700')
+                        satz_in = ui.input(value=f"{float(einst.get('stundensatz', core.DEFAULT_STUNDENSATZ)):.2f}").classes('w-full')
+
+                        ui.label("Admin-PIN:").classes('text-xs font-semibold text-slate-700 mt-2')
+                        pin_in = ui.input(value=str(einst.get("admin_pin", core.DEFAULT_ADMIN_PIN))).classes('w-full')
+
+                        def save_settings():
+                            try:
+                                neuer_satz = float(str(satz_in.value).replace(",", ".").strip())
+                                if neuer_satz <= 0 or neuer_satz > 200:
+                                    ui.notify("Bitte einen realistischen Stundensatz angeben (1–200 €).", color='negative')
+                                    return
+                            except ValueError:
+                                ui.notify("Ungültiger Stundensatz.", color='negative')
+                                return
+
+                            neue_pin = str(pin_in.value).strip()
+                            if len(neue_pin) < 4:
+                                ui.notify("Die PIN muss mindestens 4 Zeichen lang sein.", color='negative')
+                                return
+
+                            core.speichere_einstellungen({"stundensatz": neuer_satz, "admin_pin": neue_pin})
+                            stamm["satz"] = f"{neuer_satz:.2f}"
+                            core.speichere_stammdaten(stamm)
+                            satz_label.text = f"💰 {neuer_satz:.2f} € / Stunde"
+                            update_summary()
+                            settings_dialog.close()
+                            ui.notify(f"Gespeichert! Neuer Satz: {neuer_satz:.2f} €/h", color='positive')
+
+                        with ui.row().classes('justify-end w-full gap-2 mt-4'):
+                            ui.button("Abbrechen", on_click=settings_dialog.close).classes('bg-gray-400 text-white text-xs')
+                            ui.button("💾 Speichern", on_click=save_settings).classes('bg-positive text-white text-xs')
+                    settings_dialog.open()
+
+                def open_admin_pin_dialog():
+                    with ui.dialog() as pin_dialog, ui.card().classes('p-4 max-w-sm w-full'):
+                        ui.label("🔒 Admin-Bereich (Vorstand)").classes('text-md font-bold text-primary')
+                        ui.label("Bitte 4-stellige Admin-PIN eingeben:").classes('text-xs text-slate-600')
+                        pin_input = ui.input(placeholder='PIN (z. B. 4711)', password=True, password_toggle_button=True).classes('w-full mt-2')
+
+                        def verify_pin():
+                            einst = core.lade_einstellungen()
+                            korrekt = str(einst.get("admin_pin", core.DEFAULT_ADMIN_PIN))
+                            if (pin_input.value or "").strip() == korrekt:
+                                pin_dialog.close()
+                                open_admin_settings_modal()
+                            else:
+                                ui.notify("Falsche PIN! Zugriff verweigert.", color='negative')
+
+                        with ui.row().classes('justify-end w-full gap-2 mt-4'):
+                            ui.button("Abbrechen", on_click=pin_dialog.close).classes('bg-gray-400 text-white text-xs')
+                            ui.button("OK", on_click=verify_pin).classes('bg-primary text-white text-xs')
+                    pin_dialog.open()
+
+                with ui.row().classes('w-full justify-between items-center mt-3 p-2.5 bg-slate-100 border border-slate-200 rounded'):
+                    with ui.column().classes('gap-0'):
+                        ui.label("Vergütungssatz (fest):").classes('text-xs text-slate-500 font-semibold')
+                        satz_label = ui.label(f"💰 {float(stamm.get('satz', core.DEFAULT_STUNDENSATZ)):.2f} € / Stunde").classes('text-sm font-bold text-slate-800')
+                    ui.button("⚙️", on_click=open_admin_pin_dialog).classes('bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm py-1 px-2.5 rounded shadow-sm').props('flat dense')
 
             # 2. Kursdaten
             with ui.card().classes('w-full p-4 border border-slate-200'):
@@ -259,6 +321,9 @@ def index():
                                     stamm_neu = daten.get("stammdaten", {})
                                     if stamm_neu:
                                         stamm.update(stamm_neu)
+                                        einst = core.lade_einstellungen()
+                                        stamm["satz"] = f"{float(einst.get('stundensatz', core.DEFAULT_STUNDENSATZ)):.2f}"
+                                        satz_label.text = f"💰 {float(stamm['satz']):.2f} € / Stunde"
 
                                     kurs_neu = daten.get("kurs", {})
                                     if kurs_neu:
@@ -280,7 +345,8 @@ def index():
                                     ui.button("Abbrechen", on_click=imp_dialog.close).classes('bg-gray-400 text-white text-xs')
                             imp_dialog.open()
 
-                        ui.button("📂 PDF laden", on_click=open_import_dialog).classes('bg-sky-600 text-white text-xs')
+                        # Hinweis: Button 'PDF laden' für reguläre Erfasser vorerst ausgeblendet (Logik bleibt für spätere Prüf-App erhalten)
+                        # ui.button("📂 PDF laden", on_click=open_import_dialog).classes('bg-sky-600 text-white text-xs')
 
                         def reset_kurs():
                             with ui.dialog() as dialog, ui.card():

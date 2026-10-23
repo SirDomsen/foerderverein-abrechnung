@@ -89,12 +89,31 @@ class WindowsAbrechnungsApp(ctk.CTk):
             "DE89 3704 0044 0532 0130 00",
             self.stamm.get("iban", "")
         )
-        self.entry_satz = self._create_labeled_entry(
-            stamm_card,
-            "Vereinbarter Stundensatz (€/h):",
-            "z. B. 20.00",
-            self.stamm.get("satz", "20.00")
+
+        # Stundensatz Anzeige & Admin-Button
+        satz_card = ctk.CTkFrame(stamm_card, fg_color=("gray85", "gray22"), corner_radius=6)
+        satz_card.pack(fill="x", padx=10, pady=(6, 10))
+
+        self.lbl_satz = ctk.CTkLabel(
+            satz_card,
+            text=f"💰 Vereinssatz: {float(self.stamm.get('satz', core.DEFAULT_STUNDENSATZ)):.2f} €/h (fest)",
+            font=("Arial", 11, "bold"),
+            text_color=("gray20", "gray85")
         )
+        self.lbl_satz.pack(side="left", padx=10, pady=6)
+
+        self.btn_admin_satz = ctk.CTkButton(
+            satz_card,
+            text="⚙️",
+            width=32,
+            height=26,
+            font=("Arial", 12),
+            fg_color=("gray75", "gray30"),
+            hover_color=("gray65", "gray40"),
+            text_color=("gray10", "gray95"),
+            command=self._admin_pin_dialog
+        )
+        self.btn_admin_satz.pack(side="right", padx=6, pady=4)
 
         # 2. Kursdaten (dieser Vorgang)
         kurs_card = ctk.CTkFrame(self.left_frame, fg_color=("gray92", "gray17"), corner_radius=10)
@@ -183,15 +202,17 @@ class WindowsAbrechnungsApp(ctk.CTk):
         if self.var_mehrtaegig.get():
             self.frame_mehrtaegig.pack(fill="x", padx=0, pady=0)
 
+        self.frame_dauer = ctk.CTkFrame(kurs_card, fg_color="transparent")
+        self.frame_dauer.pack(fill="x", padx=0, pady=0)
         self.entry_kurs_dauer = self._create_labeled_entry(
-            kurs_card,
+            self.frame_dauer,
             "Gesamtdauer in Stunden (z. B. 2.0 oder 8.0):",
             "2.0",
             self.kurs.get("dauer", "2.0")
         )
 
         for e in [self.entry_leiter, self.entry_anschrift, self.entry_telefon,
-                  self.entry_iban, self.entry_satz,
+                  self.entry_iban,
                   self.entry_kurs_id, self.entry_kurs_titel, self.entry_ag,
                   self.entry_kurs_datum, self.entry_termine_anzahl, self.entry_kurs_end_datum,
                   self.entry_kurs_dauer]:
@@ -274,17 +295,6 @@ class WindowsAbrechnungsApp(ctk.CTk):
 
         header_btn_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
         header_btn_frame.pack(side="right")
-
-        ctk.CTkButton(
-            header_btn_frame,
-            text="📂 PDF laden",
-            fg_color="#0284c7",
-            hover_color="#0369a1",
-            text_color="white",
-            width=85,
-            font=("Arial", 11, "bold"),
-            command=self.pdf_oeffnen_und_laden
-        ).pack(side="left", padx=(0, 6))
 
         ctk.CTkButton(
             header_btn_frame,
@@ -377,8 +387,12 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self.entry_telefon.insert(0, self.stamm.get("telefon", ""))
             self.entry_iban.delete(0, "end")
             self.entry_iban.insert(0, self.stamm.get("iban", ""))
-            self.entry_satz.delete(0, "end")
-            self.entry_satz.insert(0, self.stamm.get("satz", "20.00"))
+            
+            # Stundensatz immer aus geschützten Vereinseinstellungen
+            einst = core.lade_einstellungen()
+            akt_satz = float(einst.get("stundensatz", core.DEFAULT_STUNDENSATZ))
+            self.stamm["satz"] = f"{akt_satz:.2f}"
+            self.lbl_satz.configure(text=f"💰 Vereinssatz: {akt_satz:.2f} €/h (fest)")
 
         # Kursdaten befüllen
         kurs_neu = daten.get("kurs", {})
@@ -420,7 +434,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
 
     def _on_mehrtaegig_toggled(self):
         if self.var_mehrtaegig.get():
-            self.frame_mehrtaegig.pack(fill="x", padx=0, pady=0, before=self.entry_kurs_dauer)
+            self.frame_mehrtaegig.pack(fill="x", padx=0, pady=0, before=self.frame_dauer)
         else:
             self.frame_mehrtaegig.pack_forget()
         self._on_input_changed()
@@ -430,7 +444,6 @@ class WindowsAbrechnungsApp(ctk.CTk):
         self.stamm["anschrift"] = self.entry_anschrift.get()
         self.stamm["telefon"] = self.entry_telefon.get()
         self.stamm["iban"] = self.entry_iban.get()
-        self.stamm["satz"] = self.entry_satz.get()
 
         # Automatischer Vorschlag für Kurs-ID, falls Titel getippt wird und ID noch leer ist
         aktuelle_id = self.entry_kurs_id.get().strip()
@@ -451,6 +464,90 @@ class WindowsAbrechnungsApp(ctk.CTk):
         core.speichere_stammdaten(self.stamm)
         core.speichere_entwurf(self.kurs, self.belege_liste)
         self.liste_aktualisieren()
+
+    def _admin_pin_dialog(self):
+        dialog = ctk.CTkInputDialog(
+            text="Bitte Admin-PIN für Vereinseinstellungen eingeben:",
+            title="Admin-Zugang (Vorstand)"
+        )
+        pin = dialog.get_input()
+        if pin is None:
+            return  # Abgebrochen
+        einst = core.lade_einstellungen()
+        korrekt = str(einst.get("admin_pin", core.DEFAULT_ADMIN_PIN))
+        if pin.strip() == korrekt:
+            self._admin_einstellungen_oeffnen()
+        else:
+            messagebox.showerror("Zugriff verweigert", "Falsche Admin-PIN!")
+
+    def _admin_einstellungen_oeffnen(self):
+        einst = core.lade_einstellungen()
+        top = ctk.CTkToplevel(self)
+        top.title("⚙️ Vereinseinstellungen (Admin / Vorstand)")
+        top.geometry("440x280")
+        top.resizable(False, False)
+        top.transient(self)
+        top.grab_set()
+
+        ctk.CTkLabel(
+            top,
+            text="⚙️ Vereinseinstellungen",
+            font=("Arial", 14, "bold"),
+            text_color=("#1e3d59", "#64b5f6")
+        ).pack(anchor="w", padx=20, pady=(15, 4))
+
+        ctk.CTkLabel(
+            top,
+            text="Hier kann der feste Stundensatz für alle Kursleiter\nsowie die Admin-PIN geändert werden.",
+            font=("Arial", 11),
+            text_color=("gray40", "gray70"),
+            justify="left"
+        ).pack(anchor="w", padx=20, pady=(0, 12))
+
+        # Stundensatz
+        f_satz = ctk.CTkFrame(top, fg_color="transparent")
+        f_satz.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(f_satz, text="Stundensatz (€/h):", font=("Arial", 11, "bold"), width=150, anchor="w").pack(side="left")
+        e_satz = ctk.CTkEntry(f_satz, width=120)
+        e_satz.insert(0, f"{float(einst.get('stundensatz', core.DEFAULT_STUNDENSATZ)):.2f}")
+        e_satz.pack(side="left")
+
+        # Admin-PIN
+        f_pin = ctk.CTkFrame(top, fg_color="transparent")
+        f_pin.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(f_pin, text="Admin-PIN:", font=("Arial", 11, "bold"), width=150, anchor="w").pack(side="left")
+        e_pin = ctk.CTkEntry(f_pin, width=120)
+        e_pin.insert(0, str(einst.get("admin_pin", core.DEFAULT_ADMIN_PIN)))
+        e_pin.pack(side="left")
+
+        def speichern():
+            try:
+                neuer_satz = float(e_satz.get().replace(",", ".").strip())
+                if neuer_satz <= 0 or neuer_satz > 200:
+                    messagebox.showerror("Fehler", "Bitte einen realistischen Stundensatz angeben (1–200 €).", parent=top)
+                    return
+            except ValueError:
+                messagebox.showerror("Fehler", "Bitte einen gültigen Zahlenwert für den Stundensatz eingeben.", parent=top)
+                return
+
+            neue_pin = e_pin.get().strip()
+            if len(neue_pin) < 4:
+                messagebox.showerror("Fehler", "Die PIN muss mindestens 4 Zeichen lang sein.", parent=top)
+                return
+
+            core.speichere_einstellungen({"stundensatz": neuer_satz, "admin_pin": neue_pin})
+            self.stamm["satz"] = f"{neuer_satz:.2f}"
+            core.speichere_stammdaten(self.stamm)
+            self.lbl_satz.configure(text=f"💰 Vereinssatz: {neuer_satz:.2f} €/h (fest)")
+            self.liste_aktualisieren()
+            messagebox.showinfo("Gespeichert", f"Vereinseinstellungen wurden aktualisiert!\nNeuer Stundensatz: {neuer_satz:.2f} €/h", parent=top)
+            top.destroy()
+
+        btn_box = ctk.CTkFrame(top, fg_color="transparent")
+        btn_box.pack(fill="x", padx=20, pady=(20, 10))
+
+        ctk.CTkButton(btn_box, text="Abbrechen", fg_color=("gray60", "gray40"), hover_color="gray50", width=100, command=top.destroy).pack(side="right", padx=(10, 0))
+        ctk.CTkButton(btn_box, text="💾 Speichern", fg_color=("#15803d", "#16a34a"), hover_color="#15803d", width=120, command=speichern).pack(side="right")
 
     def open_export_dir(self):
         try:
@@ -584,7 +681,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
 
         summen = core.berechne_summen(
             self.entry_kurs_dauer.get(),
-            self.entry_satz.get(),
+            self.stamm.get("satz", f"{core.DEFAULT_STUNDENSATZ:.2f}"),
             self.belege_liste
         )
 
