@@ -4,6 +4,7 @@ Setzt direkt auf core.py auf.
 """
 
 import os
+import socket
 from datetime import datetime
 from nicegui import ui, app
 
@@ -11,6 +12,18 @@ import core
 
 # Web-spezifisches Upload-Verzeichnis
 UPLOADS_DIR = core.UPLOADS_DIR
+
+
+def get_local_ip() -> str:
+    """Ermittelt die primäre lokale IPv4-Adresse im WLAN/Netzwerk."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 @ui.page('/')
@@ -40,7 +53,23 @@ def index():
     # Header
     with ui.header().classes('bg-primary text-white justify-between items-center py-2 px-4 shadow'):
         ui.label(f"🏫 {core.__app_name__}").classes('text-lg md:text-xl font-bold')
-        ui.badge(f"v{core.__version__}", color='secondary')
+        with ui.row().classes('items-center gap-2'):
+            def open_mobile_dialog():
+                ip = get_local_ip()
+                mobile_url = f"http://{ip}:8080"
+                with ui.dialog() as mob_dialog, ui.card().classes('p-5 max-w-sm w-full text-center items-center'):
+                    ui.label("📱 Auf dem Handy öffnen").classes('text-lg font-bold text-primary')
+                    ui.label("Scanne den QR-Code mit der Smartphone-Kamera (im selben WLAN):").classes('text-xs text-slate-600')
+                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=180x180&data={mobile_url}"
+                    ui.image(qr_url).classes('w-44 h-44 my-2 mx-auto rounded shadow-sm border')
+                    ui.label(mobile_url).classes('font-mono font-bold text-sm bg-slate-100 p-2 rounded text-slate-800 select-all')
+                    ui.label("Tipp: Im Handy-Browser 'Zum Startbildschirm hinzufügen' wählen.").classes('text-xs text-slate-500 italic mt-1')
+                    with ui.row().classes('justify-center w-full mt-3'):
+                        ui.button("Schließen", on_click=mob_dialog.close).classes('bg-primary text-white text-xs')
+                mob_dialog.open()
+
+            ui.button("📱 Handy-Link & QR", on_click=open_mobile_dialog).classes('bg-secondary hover:bg-amber-600 text-white text-xs py-1 px-2.5 rounded shadow-sm').props('dense')
+            ui.badge(f"v{core.__version__}", color='secondary')
 
     # 2-Spalten / Responsive Grid
     with ui.row().classes('w-full max-w-6xl mx-auto p-3 md:p-6 gap-6'):
@@ -225,7 +254,7 @@ def index():
                     datei_label.text = f"📎 Gewählt: {fname}"
                     ui.notify(f"Datei '{fname}' bereitgestellt", color='positive')
 
-                ui.upload(on_upload=handle_upload, max_files=1, auto_upload=True).classes('w-full my-2')
+                ui.upload(on_upload=handle_upload, max_files=1, auto_upload=True).props('accept="image/*,.pdf"').classes('w-full my-2')
 
                 def add_beleg():
                     d_parsed, err = core.parse_datum(bel_datum.value or "", "Belegdatum")
@@ -371,7 +400,7 @@ def index():
 
                         ui.button("🔄 Neuer Kurs", on_click=reset_kurs).classes('bg-secondary text-white text-xs')
 
-                summary_text = ui.textarea().classes('w-full font-mono text-xs flex-1 min-h-[300px]').props('readonly')
+                summary_container = ui.column().classes('w-full gap-3 flex-1')
 
                 def update_summary():
                     summen = core.berechne_summen(kurs["dauer"], stamm["satz"], belege)
@@ -389,72 +418,114 @@ def index():
 
                     kd_parsed, _ = core.parse_datum(pruef_datum_str, "Kursdatum")
                     periode_text = "–"
-                    warn_status_text = ""
+                    warns = []
                     if kd_parsed:
                         _, _, p_name = core.ferien_mgr.ermittle_abrechnungszeitraum(kd_parsed)
                         periode_text = p_name
                         warns = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
-                        if warns:
-                            for w in warns:
-                                if w["level"] == "gesperrt":
-                                    icon = "⛔"
-                                elif w["level"] == "vorstand":
-                                    icon = "⚠️"
-                                else:
-                                    icon = "ℹ️"
-                                warn_status_text += f"\n  {icon} {w['titel']}"
-                        else:
-                            warn_status_text = "\n  ✓ Im regulären Abrechnungszeitraum"
 
                     iban_val = (stamm.get("iban") or "").strip()
                     if iban_val:
-                        i_ok, _ = core.validiere_iban(iban_val)
-                        iban_text = f"{core.formatiere_iban(iban_val)} {'(Gültig ✓)' if i_ok else '(Ungültig ⚠)'}"
+                        iban_ok, _ = core.validiere_iban(iban_val)
                     else:
-                        iban_text = "– Nicht angegeben –"
+                        iban_ok = False
 
-                    kid_anzeige = kurs.get("id") or "– Noch keine Kurs-ID –"
-                    leiter_anzeige = stamm.get("leiter") or "Kursleiter"
-                    anschrift_anzeige = stamm.get("anschrift") or "–"
-                    telefon_anzeige = stamm.get("telefon") or "–"
-
+                    kid_anzeige = kurs.get("id") or "Noch keine Kurs-ID"
+                    titel_anzeige = kurs.get("titel") or "Kein Kurstitel"
+                    leiter_anzeige = stamm.get("leiter") or "Kein Name hinterlegt"
                     fester_name = core.generiere_standard_dateinamen(
-                        kurs["datum"],
-                        kurs["titel"],
+                        kurs.get("datum", ""),
+                        kurs.get("titel", ""),
                         leiter_anzeige,
                         kurs.get("id", "")
                     )
 
-                    lines = [
-                        "=" * 45,
-                        f"KURS-ID:      {kid_anzeige}",
-                        f"KURS:         {kurs['titel'] or '–'}",
-                        f"PERSON:       {leiter_anzeige} ({telefon_anzeige})",
-                        f"ANSCHRIFT:    {anschrift_anzeige}",
-                        f"KLASSE:       {kurs['ag'] or '–'}",
-                        f"TERMIN/ZEIT:  {termin_anzeige}",
-                        f"PERIODE (BW): {periode_text}{warn_status_text}",
-                        f"IBAN:         {iban_text}",
-                        f"──> Ref-Zweck: {kid_anzeige} {leiter_anzeige}",
-                        f"──> Dateiname: {fester_name}",
-                        "=" * 45,
-                        "",
-                        "1. AUFWANDSENTSCHÄDIGUNG:",
-                        f" • {summen['dauer']:.2f} Std. à {summen['satz']:.2f} €/h",
-                        f" ──> Honorar: {summen['honorar']:.2f} €",
-                        "",
-                        f"2. MATERIALAUSLAGEN ({len(belege)} Posten):"
-                    ]
-                    for idx, b in enumerate(belege, 1):
-                        lines.append(f" #{idx} | {b['datum']} | {b['zweck'][:15]}: {b['betrag']:.2f} €")
-                    lines.extend([
-                        f" ──> Auslagen gesamt: {summen['auslagen']:.2f} €",
-                        "",
-                        "=" * 45,
-                        f"GESAMTAUSZAHLUNG: {summen['gesamt']:.2f} €",
-                        "=" * 45
-                    ])
-                    summary_text.value = "\n".join(lines)
+                    summary_container.clear()
+                    with summary_container:
+                        # 1. Kurs & Person Info-Karte
+                        with ui.card().classes('w-full p-3 bg-slate-50 border border-slate-200 rounded-lg shadow-none'):
+                            with ui.row().classes('w-full justify-between items-start gap-2'):
+                                with ui.column().classes('gap-0.5 flex-1 min-w-[140px]'):
+                                    ui.label(titel_anzeige).classes('font-bold text-slate-800 text-sm md:text-base leading-snug break-words')
+                                    with ui.row().classes('items-center gap-1.5 text-xs text-slate-600 flex-wrap'):
+                                        ui.badge(f"ID: {kid_anzeige}", color='primary').classes('text-[11px]')
+                                        if kurs.get("ag"):
+                                            ui.badge(f"Klasse: {kurs.get('ag')}", color='secondary').classes('text-[11px]')
+                                with ui.column().classes('items-end gap-0.5 flex-shrink-0'):
+                                    ui.label(leiter_anzeige).classes('font-semibold text-slate-700 text-xs text-right')
+                                    if iban_val:
+                                        ui.label(core.formatiere_iban(iban_val)).classes(f'font-mono text-[11px] {("text-emerald-600" if iban_ok else "text-amber-600 font-bold")}')
+                                    else:
+                                        ui.label("Keine IBAN").classes('text-[11px] text-red-500 italic')
+
+                            ui.separator().classes('my-2')
+
+                            # Termine & BW-Periode
+                            with ui.row().classes('w-full justify-between items-center text-xs flex-wrap gap-2'):
+                                with ui.row().classes('items-center gap-1.5'):
+                                    ui.label("📅").classes('text-xs')
+                                    ui.label(termin_anzeige).classes('font-medium text-slate-700')
+                                with ui.row().classes('items-center gap-1.5'):
+                                    ui.label("⏳").classes('text-xs')
+                                    ui.label(periode_text).classes('text-slate-600')
+
+                            # Warnungen falls Frist/Ferien
+                            if warns:
+                                with ui.column().classes('w-full mt-2 gap-1'):
+                                    for w in warns:
+                                        if w["level"] == "gesperrt":
+                                            bg_c = "bg-red-50 border-red-200 text-red-700"
+                                            icon = "⛔"
+                                        elif w["level"] == "vorstand":
+                                            bg_c = "bg-amber-50 border-amber-200 text-amber-800"
+                                            icon = "⚠️"
+                                        else:
+                                            bg_c = "bg-sky-50 border-sky-200 text-sky-800"
+                                            icon = "ℹ️"
+                                        with ui.row().classes(f'w-full p-2 rounded border text-xs items-center gap-1.5 {bg_c}'):
+                                            ui.label(icon).classes('text-sm flex-shrink-0')
+                                            ui.label(w["titel"]).classes('font-semibold leading-tight')
+                            elif kd_parsed:
+                                with ui.row().classes('w-full mt-2 p-1.5 bg-emerald-50 border border-emerald-200 rounded text-xs items-center gap-1.5 text-emerald-700'):
+                                    ui.label("✓ Im regulären Abrechnungszeitraum").classes('font-medium')
+
+                        # 2. Kostenaufstellung
+                        with ui.card().classes('w-full p-3 bg-white border border-slate-200 rounded-lg shadow-none'):
+                            ui.label("ABRECHNUNGS-POSTEN").classes('text-[11px] font-bold text-slate-500 tracking-wider mb-1.5')
+
+                            # Honorar
+                            with ui.row().classes('w-full justify-between items-center py-1.5 text-sm'):
+                                with ui.column().classes('gap-0'):
+                                    ui.label("Aufwandsentschädigung").classes('font-medium text-slate-800')
+                                    ui.label(f"{summen['dauer']:.2f} Std. × {summen['satz']:.2f} €/h").classes('text-xs text-slate-500')
+                                ui.label(f"{summen['honorar']:.2f} €").classes('font-bold text-slate-800')
+
+                            # Auslagen
+                            with ui.row().classes('w-full justify-between items-center py-1.5 text-sm border-t border-slate-100'):
+                                with ui.column().classes('gap-0'):
+                                    ui.label(f"Materialauslagen ({len(belege)} Belege)").classes('font-medium text-slate-800')
+                                    if belege:
+                                        detail_text = ", ".join([f"{b['betrag']:.2f} €" for b in belege[:3]])
+                                        if len(belege) > 3:
+                                            detail_text += " ..."
+                                        ui.label(detail_text).classes('text-xs text-slate-400')
+                                    else:
+                                        ui.label("Keine Auslagen erfasst").classes('text-xs text-slate-400 italic')
+                                ui.label(f"{summen['auslagen']:.2f} €").classes('font-bold text-slate-800')
+
+                            # Prominente Gesamtsumme
+                            with ui.row().classes('w-full justify-between items-center p-3 mt-2 bg-emerald-50 border border-emerald-300 rounded-md'):
+                                ui.label("Gesamtauszahlung:").classes('text-sm md:text-base font-bold text-emerald-950')
+                                ui.label(f"{summen['gesamt']:.2f} €").classes('text-xl md:text-2xl font-black text-emerald-700')
+
+                        # 3. Kassenwart Info & Dateiname
+                        with ui.column().classes('w-full p-2.5 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-500 gap-1'):
+                            with ui.row().classes('w-full justify-between items-center'):
+                                ui.label("Überweisungszweck:").classes('font-semibold text-slate-600')
+                                ui.label(f"{kid_anzeige} {leiter_anzeige}").classes('font-mono font-bold text-slate-800 text-right text-xs')
+                            with ui.row().classes('w-full justify-between items-center'):
+                                ui.label("Dateiname:").classes('font-semibold text-slate-600')
+                                ui.label(fester_name).classes('font-mono text-[11px] text-slate-500 text-right truncate max-w-[220px]')
 
                 update_summary()
 
