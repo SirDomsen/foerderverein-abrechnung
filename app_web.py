@@ -141,7 +141,7 @@ def index():
                     with ui.dialog() as pin_dialog, ui.card().classes('p-4 max-w-sm w-full'):
                         ui.label("🔒 Admin-Bereich (Vorstand)").classes('text-md font-bold text-primary')
                         ui.label("Bitte 4-stellige Admin-PIN eingeben:").classes('text-xs text-slate-600')
-                        pin_input = ui.input(placeholder='PIN (z. B. 4711)', password=True, password_toggle_button=True).classes('w-full mt-2')
+                        pin_input = ui.input(placeholder='••••', password=True, password_toggle_button=True).classes('w-full mt-2')
 
                         def verify_pin():
                             einst = core.lade_einstellungen()
@@ -151,6 +151,8 @@ def index():
                                 open_admin_settings_modal()
                             else:
                                 ui.notify("Falsche PIN! Zugriff verweigert.", color='negative')
+
+                        pin_input.on('keydown.enter', verify_pin)
 
                         with ui.row().classes('justify-end w-full gap-2 mt-4'):
                             ui.button("Abbrechen", on_click=pin_dialog.close).classes('bg-gray-400 text-white text-xs')
