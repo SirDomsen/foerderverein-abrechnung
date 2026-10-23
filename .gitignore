@@ -16,3 +16,8 @@ dist/
 # Umgebungen
 .venv/
 venv/
+
+# VS Code: Ordner ignorieren, aber Build- & Button-Konfiguration behalten
+.vscode/*
+!.vscode/tasks.json
+!.vscode/settings.json

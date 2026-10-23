@@ -1,0 +1,16 @@
+{
+  "actionButtons": {
+    "reloadButton": null,
+    "defaultColor": "#ffffff",
+    "commands": [
+      {
+        "name": "$(gear) Build EXE",
+        "color": "#4caf50",
+        "tooltip": "Baut die AbrechnungsManager.exe mit PyInstaller",
+        "singleInstance": true,
+        "focus": true,
+        "command": "python -m PyInstaller --noconsole --onefile --name AbrechnungsManager --collect-all customtkinter app_windows.py"
+      }
+    ]
+  }
+}
