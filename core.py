@@ -677,8 +677,8 @@ def lese_abrechnung_aus_pdf(pdf_quelle: Any) -> Tuple[bool, Optional[Dict[str, A
                 if part.startswith("KursID="):
                     kid = part.split("=", 1)[1]
             return True, {
-                "stammdaten": {"leiter": meta.get("/Author", ""), "iban": "", "satz": "20.00"},
-                "kurs": {"id": kid, "titel": meta.get("/Title", ""), "ag": "", "datum": "", "dauer": "2.0"},
+                "stammdaten": {"leiter": meta.get("/Author", ""), "anschrift": "", "telefon": "", "iban": "", "satz": "20.00"},
+                "kurs": {"id": kid, "titel": meta.get("/Title", ""), "ag": "", "datum": "", "dauer": "2.0", "ist_mehrtaegig": False, "termine_anzahl": "1", "end_datum": ""},
                 "belege": []
             }, None
 

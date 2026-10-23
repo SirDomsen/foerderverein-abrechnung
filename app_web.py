@@ -25,7 +25,10 @@ def index():
         "titel": entwurf.get("titel", ""),
         "ag": entwurf.get("ag", ""),
         "datum": entwurf.get("datum", ""),
-        "dauer": entwurf.get("dauer", "2.0")
+        "dauer": entwurf.get("dauer", "2.0"),
+        "ist_mehrtaegig": bool(entwurf.get("ist_mehrtaegig", False)),
+        "termine_anzahl": str(entwurf.get("termine_anzahl", "1")),
+        "end_datum": entwurf.get("end_datum", "")
     }
     belege = entwurf.get("belege", [])
     aktuelle_datei = {"path": None, "name": None}
@@ -112,7 +115,8 @@ def index():
                     autosave()
                     update_summary()
 
-                ui.checkbox("Kurs fand an mehreren Tagen statt", value=bool(kurs.get("ist_mehrtaegig", False)), on_change=on_mehrtaegig_change).classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                ui.checkbox("Kurs fand an mehreren Tagen statt", value=bool(kurs.get("ist_mehrtaegig", False)), on_change=on_mehrtaegig_change) \
+                    .bind_value(kurs, 'ist_mehrtaegig').classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
 
                 ui.label("Startdatum des Kurses (TT.MM.JJJJ):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
                 ui.input(placeholder='z. B. 23.10.2026', on_change=lambda e: (kurs.update(datum=e.value), autosave(), update_summary())) \
