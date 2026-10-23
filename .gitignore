@@ -1,0 +1,18 @@
+# Python Bytecode
+__pycache__/
+*.py[cod]
+
+# Lokale Anwendungsdaten (Datenschutz: keine Belege/Abrechnungen auf GitHub!)
+cache/
+Exportierte Rechnungen/
+*.json
+*.pdf
+
+# PyInstaller Build-Ordner
+build/
+dist/
+*.spec
+
+# Umgebungen
+.venv/
+venv/
