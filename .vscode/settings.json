@@ -14,10 +14,18 @@
       {
         "name": "$(browser) Start Web-App",
         "color": "#38bdf8",
-        "tooltip": "Startet den NiceGUI Webserver (app_web.py)",
+        "tooltip": "Startet den NiceGUI Webserver (Web & Smartphone)",
         "singleInstance": true,
         "focus": true,
         "command": "python app_web.py"
+      },
+      {
+        "name": "$(window) Start Desktop-App",
+        "color": "#f59e0b",
+        "tooltip": "Startet die native Windows-Desktop-Anwendung",
+        "singleInstance": true,
+        "focus": true,
+        "command": "python app_windows.py"
       }
     ]
   }

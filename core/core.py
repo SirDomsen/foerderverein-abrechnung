@@ -1,0 +1,1348 @@
+"""
+core.py - Förderverein Grundschule: Abrechnungs-Kernlogik
+Plattformunabhängig für Windows, Web (NiceGUI/FastAPI) und Mobile.
+"""
+
+__app_name__ = "Förderverein Grundschule – Abrechnungs-Manager"
+__version__ = "1.0.0"
+
+import os
+import re
+import sys
+import json
+import urllib.request
+from datetime import datetime, date, timedelta
+from typing import Dict, List, Tuple, Optional, Any
+
+from PIL import Image
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Flowable
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from pypdf import PdfWriter, PdfReader
+
+
+# ==============================================================================
+# 0. PFAD- UND VERZEICHNIS-INITIALISIERUNG
+# ==============================================================================
+def get_project_root() -> str:
+    """Ermittelt das Projekt-Wurzelverzeichnis (auch bei gepackter PyInstaller .exe)."""
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(os.path.dirname(sys.executable))
+    base = os.path.abspath(os.path.dirname(__file__))
+    if os.path.basename(base).lower() == "core":
+        return os.path.abspath(os.path.join(base, ".."))
+    return base
+
+
+PROJECT_ROOT = get_project_root()
+BASE_DIR = PROJECT_ROOT  # Rückwärtskompatibilität
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
+EXPORT_DIR = os.path.join(DATA_DIR, "export")
+UPLOADS_DIR = os.path.join(CACHE_DIR, "uploads")
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(EXPORT_DIR, exist_ok=True)
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+# Automatische Migration vorhandener Daten aus altem root/cache und root/'Exportierte Rechnungen'
+_alt_cache = os.path.join(PROJECT_ROOT, "cache")
+if os.path.exists(_alt_cache) and os.path.abspath(_alt_cache) != os.path.abspath(CACHE_DIR):
+    import shutil
+    try:
+        for _f in os.listdir(_alt_cache):
+            _src = os.path.join(_alt_cache, _f)
+            _dst = os.path.join(CACHE_DIR, _f)
+            if not os.path.exists(_dst):
+                if os.path.isdir(_src):
+                    shutil.copytree(_src, _dst)
+                else:
+                    shutil.copy2(_src, _dst)
+    except Exception:
+        pass
+
+_alt_export = os.path.join(PROJECT_ROOT, "Exportierte Rechnungen")
+if os.path.exists(_alt_export) and os.path.abspath(_alt_export) != os.path.abspath(EXPORT_DIR):
+    import shutil
+    try:
+        for _f in os.listdir(_alt_export):
+            _src = os.path.join(_alt_export, _f)
+            _dst = os.path.join(EXPORT_DIR, _f)
+            if not os.path.exists(_dst):
+                shutil.copy2(_src, _dst)
+    except Exception:
+        pass
+
+FILE_STAMM = os.path.join(CACHE_DIR, "stammdaten.json")
+FILE_ENTWURF = os.path.join(CACHE_DIR, "aktueller_entwurf.json")
+FILE_SETTINGS = os.path.join(CACHE_DIR, "settings.json")
+
+
+# ==============================================================================
+# 1. FERIEN-MANAGEMENT FÜR BADEN-WÜRTTEMBERG
+# ==============================================================================
+class FerienManagerBW:
+    """Verwaltet BW-Schulferien mit Online-API, JSON-Cache und Offline-Fallback."""
+    CACHE_FILE = os.path.join(CACHE_DIR, "ferien_cache_bw.json")
+    API_URLS = [
+        "https://ferien-api.de/api/v1/holidays/BW",
+        "https://openholidaysapi.org/SchoolHolidays?countryIsoCode=DE&subdivisionCode=DE-BW"
+    ]
+
+    def __init__(self):
+        self.ferien_liste: List[Dict[str, Any]] = []
+        self._ferien_laden()
+
+    def _ferien_laden(self) -> None:
+        # 1. Online-Abruf über primäre und Fallback-APIs
+        for url in self.API_URLS:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": f"FoerdervereinAbrechnung/{__version__}"}
+                )
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                    if resp.status == 200:
+                        daten = json.loads(resp.read().decode("utf-8"))
+                        if daten and isinstance(daten, list):
+                            self._parse_api_daten(daten)
+                            if self.ferien_liste:
+                                with open(self.CACHE_FILE, "w", encoding="utf-8") as f:
+                                    json.dump(daten, f, ensure_ascii=False, indent=2)
+                                return
+            except Exception:
+                continue
+
+        # 2. Lokaler Cache
+        if os.path.exists(self.CACHE_FILE):
+            try:
+                with open(self.CACHE_FILE, "r", encoding="utf-8") as f:
+                    daten = json.load(f)
+                    self._parse_api_daten(daten)
+                    if self.ferien_liste:
+                        return
+            except Exception:
+                pass
+
+        # 3. Offline-Fallback (Lückenlose BW-Ferienliste 2024–2028)
+        self._lade_fallback_daten()
+
+    def _parse_api_daten(self, raw_daten: List[Dict[str, Any]]) -> None:
+        self.ferien_liste = []
+        for item in raw_daten:
+            try:
+                # Unterstützt sowohl openholidaysapi (startDate/endDate) als auch ferien-api.de (start/end)
+                s_val = item.get("startDate") or item.get("start") or ""
+                e_val = item.get("endDate") or item.get("end") or ""
+                if not s_val or not e_val:
+                    continue
+                start = datetime.strptime(str(s_val)[:10], "%Y-%m-%d").date()
+                end = datetime.strptime(str(e_val)[:10], "%Y-%m-%d").date()
+
+                name = "Schulferien"
+                name_field = item.get("name")
+                if isinstance(name_field, list) and name_field:
+                    name = name_field[0].get("text", "Schulferien")
+                elif isinstance(name_field, str):
+                    # Bei ferien-api.de kommen englische Namen wie 'autumn', 'christmas'
+                    de_names = {
+                        "autumn": "Herbstferien",
+                        "christmas": "Weihnachtsferien",
+                        "easter": "Osterferien",
+                        "pentecost": "Pfingstferien",
+                        "summer": "Sommerferien",
+                        "winter": "Winterferien"
+                    }
+                    name = de_names.get(name_field.lower(), name_field.capitalize())
+
+                self.ferien_liste.append({"name": name, "start": start, "end": end})
+            except Exception:
+                continue
+        self.ferien_liste.sort(key=lambda x: x["start"])
+
+    def _lade_fallback_daten(self) -> None:
+        fallback_eintraege = [
+            # Schuljahr 2024/2025
+            ("Herbstferien 2024", "2024-10-28", "2024-10-31"),
+            ("Weihnachtsferien 2024/25", "2024-12-23", "2025-01-04"),
+            ("Osterferien 2025", "2025-04-14", "2025-04-26"),
+            ("Pfingstferien 2025", "2025-06-10", "2025-06-20"),
+            ("Sommerferien 2025", "2025-07-31", "2025-09-13"),
+            # Schuljahr 2025/2026
+            ("Herbstferien 2025", "2025-10-27", "2025-10-30"),
+            ("Weihnachtsferien 2025/26", "2025-12-22", "2026-01-05"),
+            ("Osterferien 2026", "2026-03-30", "2026-04-10"),
+            ("Pfingstferien 2026", "2026-05-26", "2026-06-05"),
+            ("Sommerferien 2026", "2026-07-30", "2026-09-12"),
+            # Schuljahr 2026/2027
+            ("Herbstferien 2026", "2026-10-26", "2026-10-31"),
+            ("Weihnachtsferien 2026/27", "2026-12-23", "2027-01-09"),
+            ("Osterferien 2027", "2027-03-25", "2027-04-03"),
+            ("Pfingstferien 2027", "2027-05-18", "2027-05-29"),
+            ("Sommerferien 2027", "2027-07-29", "2027-09-11"),
+            # Schuljahr 2027/2028
+            ("Herbstferien 2027", "2027-11-02", "2027-11-06"),
+            ("Weihnachtsferien 2027/28", "2027-12-23", "2028-01-08"),
+            ("Osterferien 2028", "2028-04-10", "2028-04-21"),
+            ("Pfingstferien 2028", "2028-06-06", "2028-06-16"),
+            ("Sommerferien 2028", "2028-07-27", "2028-09-09"),
+        ]
+        self.ferien_liste = []
+        for name, s, e in fallback_eintraege:
+            self.ferien_liste.append({
+                "name": name,
+                "start": datetime.strptime(s, "%Y-%m-%d").date(),
+                "end": datetime.strptime(e, "%Y-%m-%d").date()
+            })
+        self.ferien_liste.sort(key=lambda x: x["start"])
+
+    def pruefe_in_ferien(self, pruef_datum: date) -> Optional[str]:
+        """Prüft, ob das gegebene Datum in den Ferien liegt. Gibt den Namen der Ferien zurück."""
+        for f in self.ferien_liste:
+            if f["start"] <= pruef_datum <= f["end"]:
+                return f["name"]
+        return None
+
+    def ermittle_schuljahr_details(self, datum: date) -> Tuple[str, date, date, date]:
+        """
+        Ermittelt das dynamische Schuljahr anhand der BW-Sommerferien:
+        - Beginn: Tag nach Ende der Sommerferien des Vorjahres
+        - Ende: Letzter Tag der Sommerferien des aktuellen Jahres
+        - Letzter Schultag / Ausschlussfrist für Einreichungen: Tag vor Beginn der Sommerferien (Kassenprüfung)
+        Rückgabe: (sj_code, sj_start, sj_ende, letzter_schultag_vor_sommerferien)
+        """
+        sommer_liste = [f for f in self.ferien_liste if "sommer" in f["name"].lower()]
+        sommer_liste.sort(key=lambda x: x["start"])
+
+        for i, sf in enumerate(sommer_liste):
+            if datum <= sf["end"]:
+                sf_vor = sommer_liste[i - 1] if i > 0 else None
+                if sf_vor:
+                    sj_start = sf_vor["end"] + timedelta(days=1)
+                else:
+                    sj_start = date(sf["start"].year - 1, 9, 10)
+
+                sj_ende = sf["end"]
+                letzter_schultag = sf["start"] - timedelta(days=1)
+                start_y = (sf["start"].year - 1) % 100
+                end_y = sf["start"].year % 100
+                sj_code = f"SJ{start_y:02d}{end_y:02d}"
+                return sj_code, sj_start, sj_ende, letzter_schultag
+
+        # Fallback falls datum hinter den bekannten Sommerferien liegt
+        y = datum.year
+        if datum.month >= 8:
+            start_y, end_y = y % 100, (y + 1) % 100
+            sj_start = date(y, 9, 12)
+            sj_ende = date(y + 1, 9, 11)
+            letzter_tag = date(y + 1, 7, 28)
+        else:
+            start_y, end_y = (y - 1) % 100, y % 100
+            sj_start = date(y - 1, 9, 12)
+            sj_ende = date(y, 9, 11)
+            letzter_tag = date(y, 7, 28)
+        return f"SJ{start_y:02d}{end_y:02d}", sj_start, sj_ende, letzter_tag
+
+    def ermittle_abrechnungszeitraum(self, kurs_datum: date) -> Tuple[Optional[date], Optional[date], str]:
+        """
+        Ermittelt das Fenster 'Tag nach Ferienende vorherige Ferien' bis 'letzter Tag Folgeferien'.
+        Besonderheit: Vor den Sommerferien endet der Abrechnungszeitraum am Tag VOR Beginn der
+        Sommerferien (letzter Schultag), da in den Sommerferien bereits die Kassenprüfung stattfindet.
+        Rückgabe: (start_datum, end_datum, bezeichnung_string)
+        """
+        if not self.ferien_liste:
+            return None, None, "Abrechnungszeitraum flexibel"
+
+        vor_ferien = None
+        folge_ferien = None
+
+        for f in self.ferien_liste:
+            if f["end"] < kurs_datum:
+                vor_ferien = f
+            elif f["end"] >= kurs_datum and folge_ferien is None:
+                folge_ferien = f
+
+        if vor_ferien and folge_ferien:
+            p_start = vor_ferien["end"] + timedelta(days=1)
+            is_sommer = "sommer" in folge_ferien["name"].lower()
+            if is_sommer:
+                p_ende = folge_ferien["start"] - timedelta(days=1)
+                p_name = f"Ende {vor_ferien['name']} bis Beginn {folge_ferien['name']} (letzter Schultag)"
+            else:
+                p_ende = folge_ferien["end"]
+                p_name = f"Ende {vor_ferien['name']} bis Ende {folge_ferien['name']}"
+            return p_start, p_ende, p_name
+        elif folge_ferien:
+            is_sommer = "sommer" in folge_ferien["name"].lower()
+            p_ende = (folge_ferien["start"] - timedelta(days=1)) if is_sommer else folge_ferien["end"]
+            p_start = folge_ferien["start"] - timedelta(days=60)
+            return p_start, p_ende, f"Bis {folge_ferien['name']}"
+        elif vor_ferien:
+            return vor_ferien["end"] + timedelta(days=1), vor_ferien["end"] + timedelta(days=70), f"Ab Ende {vor_ferien['name']}"
+
+        return None, None, "Zeitraum nicht eindeutig"
+
+
+ferien_mgr = FerienManagerBW()
+
+
+# ==============================================================================
+# 2. VALIDIERUNG & DATEN-HILFSFUNKTIONEN
+# ==============================================================================
+def ermittle_schuljahr(datum: date) -> str:
+    """Gibt das Schuljahr als 'SJyyzz' zurück (z.B. SJ2627). Dynamisch anhand der BW-Sommerferien."""
+    code, _, _, _ = ferien_mgr.ermittle_schuljahr_details(datum)
+    return code
+
+
+def generiere_kurs_id_vorschlag(kurs_titel: str, kurs_datum_str: str = "") -> str:
+    """Erzeugt einen eindeutigen ID-Vorschlag wie 'SJ2627-SCHACH-01' nach Option 1."""
+    kd_parsed, _ = parse_datum(kurs_datum_str, "Kursdatum")
+    d = kd_parsed or date.today()
+    sj = ermittle_schuljahr(d)
+
+    clean = clean_filename(kurs_titel).upper()
+    clean = re.sub(r"[^A-Z0-9]", "", clean)
+    kuerzel = clean[:6] if clean else "KURS"
+    return f"{sj}-{kuerzel}-01"
+
+
+def validiere_anschrift(anschrift: str) -> Tuple[bool, Optional[str]]:
+    """Prüft, ob eine vollständige Anschrift vorliegt (nicht leer, Straße + Ort)."""
+    s = str(anschrift).strip()
+    if not s:
+        return False, "Bitte die vollständige Anschrift (Straße, Hausnummer, PLZ Ort) angeben."
+    if len(s) < 6:
+        return False, "Die angegebene Anschrift ist unvollständig. Bitte Straße, Hausnummer und PLZ/Ort angeben."
+    return True, None
+
+
+def validiere_kurs_id(kurs_id: str) -> Tuple[bool, Optional[str]]:
+    """Prüft, ob die Kurs-ID angegeben und zulässig aufgebaut ist."""
+    s = str(kurs_id).strip()
+    if not s:
+        return False, "Bitte eine Kurs-ID angeben (z. B. SJ2627-SCHACH-01)."
+    if not re.match(r"^[A-Za-z0-9_-]{3,30}$", s):
+        return False, "Die Kurs-ID darf nur aus Buchstaben, Ziffern und Bindestrichen bestehen (3–30 Zeichen)."
+    return True, None
+
+
+def validiere_iban(iban: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validiert eine 22-stellige deutsche IBAN nach ISO 7064 (Modulo 97-10).
+    Prüft:
+      1. Nicht leer
+      2. Genau 22 Stellen (nach Entfernung von Leerzeichen)
+      3. Start mit Länder-Code 'DE'
+      4. Nach 'DE' genau 20 Ziffern (2 Prüfziffern + 8 BLZ + 10 Kontonummer)
+      5. Modulo-97-Prüfsumme == 1
+    Rückgabe: (ist_gueltig, fehlermeldung_oder_none)
+    """
+    if not iban or not isinstance(iban, str):
+        return False, "Bitte eine IBAN angeben."
+
+    cleaned = iban.replace(" ", "").strip().upper()
+    if not cleaned:
+        return False, "Bitte eine IBAN angeben."
+
+    if len(cleaned) != 22:
+        return False, f"Eine deutsche IBAN muss genau 22 Zeichen lang sein (aktuell: {len(cleaned)} Zeichen)."
+
+    if not cleaned.startswith("DE"):
+        return False, "Es werden aktuell nur deutsche IBANs unterstützt (muss mit 'DE' beginnen)."
+
+    if not cleaned[2:].isdigit():
+        return False, "Die deutsche IBAN darf nach 'DE' nur aus 20 Ziffern bestehen."
+
+    # ISO 7064 Modulo 97-10 Algorithmus:
+    rearranged = cleaned[4:] + cleaned[:4]
+    num_str = "".join(str(ord(c) - 55) if c.isalpha() else c for c in rearranged)
+
+    try:
+        if int(num_str) % 97 != 1:
+            return False, "Ungültige IBAN-Prüfsumme (Prüfziffern stimmen nicht. Bitte auf Tippfehler prüfen)."
+    except ValueError:
+        return False, "IBAN konnte nicht numerisch validiert werden."
+
+    return True, None
+
+
+def formatiere_iban(iban: str) -> str:
+    """Formatiert eine IBAN in übersichtliche 4er-Blöcke (z. B. DE89 3704 0044 0532 0130 00)."""
+    cleaned = iban.replace(" ", "").strip().upper()
+    if not cleaned:
+        return ""
+    return " ".join(cleaned[i:i + 4] for i in range(0, len(cleaned), 4))
+
+
+def pruefe_wochenende(pruef_datum: date) -> Optional[str]:
+    """Prüft, ob ein Datum auf Samstag oder Sonntag fällt."""
+    if pruef_datum.weekday() == 5:
+        return "Samstag"
+    elif pruef_datum.weekday() == 6:
+        return "Sonntag"
+    return None
+
+
+def pruefe_kursdatum_plausibilitaet(kurs_datum: date, einreich_datum: Optional[date] = None) -> List[Dict[str, str]]:
+    """
+    Validiert das Kursdatum anhand der BW-Ferien und Schuljahresregeln:
+    1. Sperre: Einreichung außerhalb des aktuellen Schuljahres oder nach Beginn der Kassenprüfung
+       (letzter Tag vor Beginn der Sommerferien). Export wird vollständig gesperrt!
+    2. Vorstandsgenehmigung: Einreichung nach Ablauf des regulären Abrechnungszeitraums,
+       aber noch vor Beginn der Kassenprüfung im laufenden Schuljahr.
+    3. Hinweis: Kurstag fällt in Schulferien oder auf ein Wochenende.
+
+    Rückgabe: Liste von Warnungs-Dicts: [{"level": "gesperrt"|"vorstand"|"hinweis", "titel": "...", "nachricht": "..."}]
+    """
+    heute = einreich_datum or date.today()
+    warnungen: List[Dict[str, str]] = []
+
+    kurs_sj, k_start, k_ende, k_letzter_tag = ferien_mgr.ermittle_schuljahr_details(kurs_datum)
+    akt_sj, a_start, a_ende, a_letzter_tag = ferien_mgr.ermittle_schuljahr_details(heute)
+
+    # 1. Sperre: Kurstermin in vergangenem Schuljahr ODER heute nach Kassenprüfungsstart für das Kurs-Schuljahr
+    if kurs_datum < heute:
+        # Fall A: Kurs lag in einem vergangenen Schuljahr
+        if kurs_sj != akt_sj and kurs_datum < a_start:
+            warnungen.append({
+                "level": "gesperrt",
+                "titel": "Frist endgültig abgelaufen (Schuljahr beendet)",
+                "nachricht": (
+                    f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) liegt im abgelaufenen Schuljahr ({kurs_sj}).\n"
+                    f"Die allerletzte Frist für Einreichungen endete am {k_letzter_tag.strftime('%d.%m.%Y')} vor Beginn der Sommerferien.\n\n"
+                    f"Da die Kassenprüfung bereits stattgefunden hat, können Honorar- und Aufwandsansprüche aus budgettechnischen Gründen und aufgrund der Vorgaben zur zeitnahen Mittelverwendung für gemeinnützige Vereine nicht mehr berücksichtigt werden und sind endgültig verfallen.\n\n"
+                    f"Das Erzeugen der Abrechnungs-PDF ist gesperrt."
+                )
+            })
+            return warnungen
+
+        # Fall B: Kurs liegt im aktuellen Schuljahr, aber Einreichung erfolgt NACH dem letzten Schultag (Kassenprüfung läuft in den Sommerferien)
+        if kurs_sj == akt_sj and heute > k_letzter_tag:
+            warnungen.append({
+                "level": "gesperrt",
+                "titel": "Frist endgültig abgelaufen (Ausschlussfrist / Kassenprüfung)",
+                "nachricht": (
+                    f"Die allerletzte Frist zur Einreichung für das laufende Schuljahr ({kurs_sj}) endete am {k_letzter_tag.strftime('%d.%m.%Y')} vor Beginn der Sommerferien.\n\n"
+                    f"Da die Kassenprüfung bereits läuft, können verspätete Ansprüche nicht mehr berücksichtigt werden und sind endgültig verfallen.\n\n"
+                    f"Das Erzeugen der Abrechnungs-PDF ist gesperrt."
+                )
+            })
+            return warnungen
+
+    # Fall C: Kurstermin liegt in einem zukünftigen Schuljahr
+    if kurs_datum > a_ende:
+        warnungen.append({
+            "level": "gesperrt",
+            "titel": "Kurstermin im zukünftigen Schuljahr",
+            "nachricht": (
+                f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) liegt im zukünftigen Schuljahr ({kurs_sj}).\n"
+                f"Abrechnungen können erst im jeweiligen Schuljahr eingereicht werden."
+            )
+        })
+        return warnungen
+
+    # 2. Vorstandsgenehmigung: Abrechnungszeitraum abgelaufen, aber noch im aktuellen Schuljahr vor Kassenprüfung
+    p_start, p_ende, p_name = ferien_mgr.ermittle_abrechnungszeitraum(kurs_datum)
+    if p_ende and heute > p_ende and kurs_sj == akt_sj and heute <= k_letzter_tag:
+        warnungen.append({
+            "level": "vorstand",
+            "titel": "Abrechnungszeitraum überschritten (Vorstandsgenehmigung erforderlich)",
+            "nachricht": (
+                f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) gehört zum Abrechnungszeitraum '{p_name}'.\n"
+                f"Die reguläre Einreichungsfrist endete am {p_ende.strftime('%d.%m.%Y')}.\n\n"
+                f"Da die reguläre Frist abgelaufen ist, erfordert die Abrechnung eine ausdrückliche Genehmigung durch den Vorstand."
+            )
+        })
+
+    # 3. Liegt der Kurstag selbst in den Ferien?
+    ferien_name = ferien_mgr.pruefe_in_ferien(kurs_datum)
+    if ferien_name:
+        warnungen.append({
+            "level": "hinweis",
+            "titel": "Kurstag in den Ferien",
+            "nachricht": (
+                f"Der Kurstag ({kurs_datum.strftime('%d.%m.%Y')}) liegt in den {ferien_name} (BW).\n\n"
+                f"Handelt es sich um ein Ferienprogramm oder einen Sondertermin?"
+            )
+        })
+
+    # 4. Liegt der Kurstag am Wochenende?
+    wochenend_tag = pruefe_wochenende(kurs_datum)
+    if wochenend_tag:
+        warnungen.append({
+            "level": "hinweis",
+            "titel": "Kurstag am Wochenende",
+            "nachricht": (
+                f"Der Kurstag ({kurs_datum.strftime('%d.%m.%Y')}) fällt auf einen {wochenend_tag}.\n\n"
+                f"Handelt es sich um eine Wochenend-Veranstaltung?"
+            )
+        })
+
+    return warnungen
+
+
+def validiere_kurs_dauer(dauer_str: str) -> Tuple[bool, float, Optional[str]]:
+    """
+    Prüft die Kursdauer auf das zulässige Intervall von 1 bis 480 Minuten (ca. 0.02 bis 8.0 Std.).
+    Rückgabe: (ist_ok, dauer_in_stunden, fehlermeldung_oder_none)
+    """
+    try:
+        val = float(str(dauer_str).replace(",", ".").strip())
+    except (ValueError, AttributeError):
+        return False, 0.0, "Bitte eine gültige Kursdauer in Stunden angeben (z. B. 2.0 oder 1.5)."
+
+    minuten = val * 60.0
+    if minuten < 1:
+        return False, val, "Die Kursdauer muss mindestens 1 Minute betragen."
+    if minuten > 480:
+        return False, val, "Die Kursdauer darf maximal 480 Minuten (8.0 Stunden) pro Abrechnungstag betragen."
+
+    return True, val, None
+
+
+def parse_datum(datum_str: str, feldname: str = "Datum") -> Tuple[Optional[date], Optional[str]]:
+    """
+    Parst deutsche Formate (TT.MM.JJJJ, TT.MM.JJ) oder ISO (JJJJ-MM-TT).
+    Verhindert Datumsangaben in der Zukunft.
+    """
+    s = str(datum_str).strip()
+    if not s:
+        return None, f"Bitte ein {feldname} angeben."
+
+    parsed = None
+    for fmt in ["%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d"]:
+        try:
+            parsed = datetime.strptime(s, fmt).date()
+            break
+        except ValueError:
+            continue
+
+    if parsed is None:
+        return None, f"Ungültiges Format für {feldname} ('{s}'). Bitte TT.MM.JJJJ verwenden."
+
+    if parsed > date.today():
+        return None, f"Das {feldname} ({s}) liegt in der Zukunft. Termine in der Zukunft sind unzulässig."
+
+    return parsed, None
+
+
+def clean_filename(name: str) -> str:
+    """Bereinigt Strings für Dateinamen (keine unerlaubten Sonderzeichen)."""
+    clean = re.sub(r"[^a-zA-Z0-9äöüÄÖÜß_-]", "_", str(name).strip())
+    clean = re.sub(r"_+", "_", clean)
+    return clean.strip("_")
+
+
+def pruefe_beleg_plausibilitaet(beleg_datum: date, kurs_datum: Optional[date]) -> Tuple[bool, str, str]:
+    """
+    Prüft Belegdatum gegen den Abrechnungszeitraum mit 4-Wochen-Puffer.
+    Rückgabe: (ist_ok, warn_status, nachricht)
+    warn_status: 'ok', 'vorlauf', 'nachlauf', 'alt'
+    """
+    if not kurs_datum:
+        return True, "ok", ""
+
+    p_start, p_ende, p_name = ferien_mgr.ermittle_abrechnungszeitraum(kurs_datum)
+    if not p_start or not p_ende:
+        return True, "ok", ""
+
+    if beleg_datum > p_ende:
+        return False, "nachlauf", (
+            f"Das Belegdatum ({beleg_datum.strftime('%d.%m.%Y')}) liegt nach dem Ende "
+            f"des aktuellen Abrechnungszeitraums ({p_ende.strftime('%d.%m.%Y')})."
+        )
+
+    puffer_start = p_start - timedelta(days=28)
+    if beleg_datum < p_start:
+        if beleg_datum >= puffer_start:
+            return True, "vorlauf", (
+                f"Vorlauf-Kauf ({beleg_datum.strftime('%d.%m.%Y')}, bis zu 4 Wochen vor Periodenstart). "
+                f"Bitte prüfen, ob es sich um haltbaren Sachbedarf handelt."
+            )
+        else:
+            return False, "alt", (
+                f"Der Beleg ({beleg_datum.strftime('%d.%m.%Y')}) liegt mehr als 4 Wochen "
+                f"vor Beginn des Abrechnungszeitraums ({p_name})."
+            )
+
+    return True, "ok", ""
+
+
+def berechne_summen(kurs_dauer_str: str, stundensatz_str: str, belege: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Berechnet Arbeitsstunden, Honorar, Materialauslagen und Gesamtsumme."""
+    try:
+        dauer = float(str(kurs_dauer_str).replace(",", "."))
+    except (ValueError, AttributeError):
+        dauer = 0.0
+
+    try:
+        satz = float(str(stundensatz_str).replace(",", "."))
+    except (ValueError, AttributeError):
+        satz = 0.0
+
+    honorar = dauer * satz
+    auslagen = sum(b.get("betrag", 0.0) for b in belege)
+    gesamt = honorar + auslagen
+
+    return {
+        "dauer": dauer,
+        "satz": satz,
+        "honorar": honorar,
+        "auslagen": auslagen,
+        "gesamt": gesamt
+    }
+
+
+def generiere_standard_dateinamen(kurs_datum_str: str, kurs_titel: str, kursleiter: str, kurs_id: str = "") -> str:
+    """
+    Erzeugt das feste Schema für Kassenwart-Apps:
+    Abrechnung_[KursID]_[JJJJ-MM-TT]_[Kursleiter].pdf
+    """
+    kd_parsed, _ = parse_datum(kurs_datum_str, "Kursdatum")
+    datum_str = kd_parsed.strftime("%Y-%m-%d") if kd_parsed else date.today().strftime("%Y-%m-%d")
+    kid_clean = clean_filename(kurs_id).upper() if kurs_id else "KURS"
+    l_clean = clean_filename(kursleiter) or "Abrechnung"
+    return f"Abrechnung_{kid_clean}_{datum_str}_{l_clean}.pdf"
+
+
+# ==============================================================================
+# 3. AUTOSAVE & PERSISTENZ (JSON)
+# ==============================================================================
+DEFAULT_STUNDENSATZ = 21.00
+DEFAULT_ADMIN_PIN = "4711"
+
+
+def lade_einstellungen() -> Dict[str, Any]:
+    """Lädt die geschützten Vereinseinstellungen (Stundensatz und Admin-PIN)."""
+    daten = {"stundensatz": DEFAULT_STUNDENSATZ, "admin_pin": DEFAULT_ADMIN_PIN}
+    if os.path.exists(FILE_SETTINGS):
+        try:
+            with open(FILE_SETTINGS, "r", encoding="utf-8") as f:
+                daten.update(json.load(f))
+        except Exception:
+            pass
+    return daten
+
+
+def speichere_einstellungen(daten: Dict[str, Any]) -> None:
+    """Speichert die geschützten Vereinseinstellungen ab."""
+    try:
+        with open(FILE_SETTINGS, "w", encoding="utf-8") as f:
+            json.dump(daten, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def lade_stammdaten() -> Dict[str, str]:
+    einst = lade_einstellungen()
+    stundensatz_str = f"{float(einst.get('stundensatz', DEFAULT_STUNDENSATZ)):.2f}"
+    daten = {"leiter": "", "anschrift": "", "telefon": "", "iban": "", "satz": stundensatz_str}
+    if os.path.exists(FILE_STAMM):
+        try:
+            with open(FILE_STAMM, "r", encoding="utf-8") as f:
+                daten.update(json.load(f))
+        except Exception:
+            pass
+    # Stundensatz immer aus den geschützten Einstellungen beziehen (nicht manipulierbar)
+    daten["satz"] = stundensatz_str
+    return daten
+
+
+def speichere_stammdaten(stamm: Dict[str, str]) -> None:
+    try:
+        with open(FILE_STAMM, "w", encoding="utf-8") as f:
+            json.dump(stamm, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def lade_entwurf() -> Dict[str, Any]:
+    daten = {
+        "id": "",
+        "titel": "",
+        "ag": "",
+        "datum": "",
+        "dauer": "2.0",
+        "ist_mehrtaegig": False,
+        "termine_anzahl": "1",
+        "end_datum": "",
+        "belege": []
+    }
+    if os.path.exists(FILE_ENTWURF):
+        try:
+            with open(FILE_ENTWURF, "r", encoding="utf-8") as f:
+                daten.update(json.load(f))
+        except Exception:
+            pass
+    return daten
+
+
+def speichere_entwurf(kurs: Dict[str, Any], belege: List[Dict[str, Any]]) -> None:
+    payload = {
+        "id": kurs.get("id", ""),
+        "titel": kurs.get("titel", ""),
+        "ag": kurs.get("ag", ""),
+        "datum": kurs.get("datum", ""),
+        "dauer": kurs.get("dauer", "2.0"),
+        "ist_mehrtaegig": bool(kurs.get("ist_mehrtaegig", False)),
+        "termine_anzahl": str(kurs.get("termine_anzahl", "1")),
+        "end_datum": kurs.get("end_datum", ""),
+        "belege": belege
+    }
+    try:
+        with open(FILE_ENTWURF, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def loesche_entwurf() -> None:
+    if os.path.exists(FILE_ENTWURF):
+        try:
+            os.remove(FILE_ENTWURF)
+        except Exception:
+            pass
+
+
+def lese_abrechnung_aus_pdf(pdf_quelle: Any) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Liest eingebettete Abrechnungsdaten (abrechnungsdaten.json) aus einem bestehenden PDF aus.
+    Ermöglicht das nahtlose Wiederöffnen und digitale Weiterbearbeiten alter Abrechnungen.
+    Rückgabe: (erfolg, daten_dict, fehlermeldung_oder_none)
+    """
+    try:
+        reader = PdfReader(pdf_quelle)
+
+        # 1. Prüfen auf Attachment 'abrechnungsdaten.json'
+        if hasattr(reader, "attachments") and reader.attachments:
+            for name, val in reader.attachments.items():
+                if name == "abrechnungsdaten.json":
+                    data = None
+                    if isinstance(val, list) and len(val) > 0:
+                        item = val[0]
+                        data = getattr(item, "data", None) or (item if isinstance(item, (bytes, bytearray)) else None)
+                    elif hasattr(val, "data"):
+                        data = val.data
+                    elif isinstance(val, (bytes, bytearray)):
+                        data = val
+                    if data:
+                        daten = json.loads(data.decode("utf-8"))
+                        return True, daten, None
+
+        # 2. Fallback: Metadaten
+        meta = reader.metadata
+        if meta and meta.get("/Keywords") and "KursID=" in meta.get("/Keywords", ""):
+            kw = meta.get("/Keywords", "")
+            kid = ""
+            for part in kw.split(";"):
+                if part.startswith("KursID="):
+                    kid = part.split("=", 1)[1]
+            return True, {
+                "stammdaten": {"leiter": meta.get("/Author", ""), "anschrift": "", "telefon": "", "iban": "", "satz": "20.00"},
+                "kurs": {"id": kid, "titel": meta.get("/Title", ""), "ag": "", "datum": "", "dauer": "2.0", "ist_mehrtaegig": False, "termine_anzahl": "1", "end_datum": ""},
+                "belege": []
+            }, None
+
+        return False, None, "In dieser PDF wurden keine maschinenlesbaren Abrechnungsdaten gefunden."
+    except Exception as ex:
+        return False, None, f"Fehler beim Einlesen der PDF: {str(ex)}"
+
+
+# ==============================================================================
+# 4. REPORTLAB INTERAKTIVE FORMULARFELDER (ACROFORMS)
+# ==============================================================================
+class InteractiveTextField(Flowable):
+    """
+    Platypus Flowable für interaktive PDF-Formularfelder (AcroForms).
+    Ermöglicht direktes Ausfüllen per Tastatur in Adobe Acrobat, Edge, Chrome etc.
+    """
+    def __init__(self, name: str, width: float = 100, height: float = 16, default: str = "", tooltip: str = "", border_style: str = "solid"):
+        super().__init__()
+        self.name = name
+        self.width = width
+        self.height = height
+        self.default = default
+        self.tooltip = tooltip or name
+        self.border_style = border_style
+
+    def wrap(self, availWidth, availHeight):
+        return self.width, self.height
+
+    def draw(self):
+        # 1. Visueller weißer Eingabekasten mit sichtbarem Rahmen
+        self.canv.saveState()
+        self.canv.setStrokeColor(colors.HexColor("#94a3b8"))
+        self.canv.setFillColor(colors.HexColor("#ffffff"))
+        self.canv.setLineWidth(0.75)
+        self.canv.roundRect(0, 0, self.width, self.height, 2, fill=1, stroke=1)
+        self.canv.restoreState()
+
+        # 2. Interaktives AcroForm-Feld an den echten absoluten Seitenkoordinaten platzieren
+        try:
+            abs_x, abs_y = self.canv.absolutePosition(0, 0)
+            self.canv.acroForm.textfield(
+                name=self.name,
+                tooltip=self.tooltip,
+                x=abs_x,
+                y=abs_y,
+                width=self.width,
+                height=self.height,
+                value=self.default,
+                borderStyle=self.border_style,
+                borderColor=colors.HexColor("#64748b"),
+                fillColor=colors.HexColor("#ffffff"),
+                textColor=colors.HexColor("#0f172a"),
+                fontSize=8.5
+            )
+        except Exception:
+            pass
+
+
+# ==============================================================================
+# 5. PDF-GENERIERUNG & BELEG-MERGE
+# ==============================================================================
+def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: List[Dict[str, Any]], zielpfad: str) -> None:
+    """Rendert Deckblatt und hängt alle hinterlegten Belege (Bilder oder PDFs) hinten an."""
+    deckblatt_temp = os.path.join(CACHE_DIR, "temp_deckblatt.pdf")
+    doc = SimpleDocTemplate(deckblatt_temp, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=24, bottomMargin=24)
+    styles = getSampleStyleSheet()
+
+    FARBE_PRIM = colors.HexColor("#1e3d59")
+    FARBE_SEK = colors.HexColor("#d97706")
+    FARBE_BG_HELL = colors.HexColor("#f8fafc")
+    FARBE_BORDER = colors.HexColor("#cbd5e1")
+
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontSize=15,
+        leading=18,
+        textColor=FARBE_PRIM
+    )
+
+    # Styles für Tabellenzellen, um Überlappungen absolut zu verhindern
+    c_label = ParagraphStyle(
+        'CLabel',
+        parent=styles['Normal'],
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#475569"),
+        fontName='Helvetica-Bold'
+    )
+    c_val = ParagraphStyle(
+        'CVal',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica'
+    )
+    c_val_bold = ParagraphStyle(
+        'CValBold',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica-Bold'
+    )
+    th_left = ParagraphStyle(
+        'THLeft',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica-Bold'
+    )
+    th_right = ParagraphStyle(
+        'THRight',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        alignment=2,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica-Bold'
+    )
+    td_right = ParagraphStyle(
+        'TDRight',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        alignment=2,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica'
+    )
+    legal_style = ParagraphStyle(
+        'LegalText',
+        parent=styles['Normal'],
+        fontSize=6.2,
+        leading=8.2,
+        textColor=colors.HexColor("#334155")
+    )
+
+    elements = []
+
+    # Kopf
+    heute_datum_str = date.today().strftime("%d.%m.%Y")
+    kopf_tabelle = Table([
+        [Paragraph("<b>FÖRDERVEREIN DER GRUNDSCHULE E.V.</b>", title_style),
+         Paragraph(f"<font color='#334155'><b>Datum:</b> {heute_datum_str}</font><br/><font color='#94a3b8' size='7'>v{__version__}</font>", th_right)],
+        [Paragraph("<i>Abrechnung über Aufwandsentschädigung & Materialauslagen für Schul-AGs</i>", styles['Normal']), ""]
+    ], colWidths=[370, 153])
+    kopf_tabelle.setStyle(TableStyle([
+        ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    elements.append(kopf_tabelle)
+    elements.append(Spacer(1, 6))
+    elements.append(HRFlowable(width="100%", thickness=2, color=FARBE_SEK, spaceAfter=8))
+
+    # Stammdaten & Kurs-Referenz (Gesamtbreite: 523pt)
+    ist_mehrtaegig = bool(kurs.get("ist_mehrtaegig", False))
+    start_d_str = (kurs.get("datum", "") or "").strip()
+    end_d_str = (kurs.get("end_datum", "") or "").strip()
+    anz_termine = str(kurs.get("termine_anzahl", "1") or "1").strip()
+
+    pruef_datum_str = end_d_str if (ist_mehrtaegig and end_d_str) else start_d_str
+    parsed_kd, _ = parse_datum(pruef_datum_str, "Kursdatum")
+    _, _, p_name = ferien_mgr.ermittle_abrechnungszeitraum(parsed_kd) if parsed_kd else (None, None, "–")
+
+    if ist_mehrtaegig and end_d_str:
+        termin_label = "Kurszeitraum:"
+        termin_text = f"{start_d_str} – {end_d_str} ({anz_termine} Termine)"
+    else:
+        termin_label = "Kurstermin:"
+        termin_text = start_d_str or "–"
+
+    # Weiche Warnung (Abrechnungszeitraum überschritten, Vorstandsgenehmigung nötig):
+    # Kurstermin in ROT drucken!
+    warnungen_kd = pruefe_kursdatum_plausibilitaet(parsed_kd) if parsed_kd else []
+    hat_weiche_warnung = any(w["level"] == "vorstand" for w in warnungen_kd)
+
+    if hat_weiche_warnung:
+        p_termin = Paragraph(f"<font color='#dc2626'><b>{termin_text}</b></font>", c_val)
+    else:
+        p_termin = Paragraph(termin_text, c_val)
+
+    formatiertes_iban = formatiere_iban(stamm.get("iban", "")) or "–"
+    kid_text = kurs.get("id", "").strip() or "–"
+    anschrift_text = stamm.get("anschrift", "").strip() or "–"
+    telefon_text = stamm.get("telefon", "").strip() or "–"
+
+    stamm_rows = [
+        [
+            Paragraph("Kursleiter / Person:", c_label),
+            Paragraph(stamm.get("leiter", "") or "–", c_val_bold),
+            Paragraph("Kurs-ID / Referenz:", c_label),
+            Paragraph(kid_text, c_val_bold)
+        ],
+        [
+            Paragraph("Anschrift:", c_label),
+            Paragraph(anschrift_text, c_val),
+            Paragraph("Kurstitel:", c_label),
+            Paragraph(kurs.get("titel", "") or "–", c_val)
+        ],
+        [
+            Paragraph("Telefon / E-Mail:", c_label),
+            Paragraph(telefon_text, c_val),
+            Paragraph("Gruppe / Klasse:", c_label),
+            Paragraph(kurs.get("ag", "") or "–", c_val)
+        ],
+        [
+            Paragraph("IBAN:", c_label),
+            Paragraph(formatiertes_iban, c_val),
+            Paragraph(termin_label, c_label),
+            p_termin
+        ],
+        [
+            Paragraph("Stundensatz:", c_label),
+            Paragraph(f"{stamm.get('satz', '0')} €/h", c_val),
+            Paragraph("Abrechnungszeitraum:", c_label),
+            Paragraph(p_name, c_val)
+        ]
+    ]
+    t_stamm = Table(stamm_rows, colWidths=[115, 150, 110, 148])
+    t_stamm.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), FARBE_BG_HELL),
+        ('BOX', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_stamm)
+    elements.append(Spacer(1, 8))
+
+    # 1. Leistung (Gesamtbreite: 523pt)
+    summen = berechne_summen(kurs.get("dauer", "0"), stamm.get("satz", "0"), belege)
+    dauer = summen["dauer"]
+    honorar = summen["honorar"]
+
+    elements.append(Paragraph("<b>1. Erbrachte Kursleistung</b>", styles['Heading3']))
+    t_std = Table([
+        [
+            Paragraph("Datum", th_left),
+            Paragraph("Kursbezeichnung / Inhalt", th_left),
+            Paragraph("Dauer", th_right),
+            Paragraph("Honoraranspruch", th_right)
+        ],
+        [
+            Paragraph(kurs.get("datum", ""), c_val),
+            Paragraph(f"{kurs.get('titel', '')} ({kurs.get('ag', '')})", c_val),
+            Paragraph(f"{dauer:.2f} Std.", td_right),
+            Paragraph(f"{honorar:.2f} €", td_right)
+        ]
+    ], colWidths=[75, 260, 88, 100])
+    t_std.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+        ('GRID', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_std)
+    elements.append(Spacer(1, 8))
+
+    # 2. Auslagen (Gesamtbreite: 523pt)
+    elements.append(Paragraph("<b>2. Auslagen für Kursmaterialien</b>", styles['Heading3']))
+    t_bel_data = [[
+        Paragraph("Datum", th_left),
+        Paragraph("Händler / Verwendungszweck", th_left),
+        Paragraph("Belegnachweis", th_left),
+        Paragraph("Betrag", th_right)
+    ]]
+    idx = 1
+    for b in belege:
+        nachweis = f"Anhang #{idx}" if b.get("datei") else "Eigenbeleg/Kein Anhang"
+        t_bel_data.append([
+            Paragraph(b.get("datum", ""), c_val),
+            Paragraph(b.get("zweck", ""), c_val),
+            Paragraph(nachweis, c_val),
+            Paragraph(f"{b.get('betrag', 0.0):.2f} €", td_right)
+        ])
+        idx += 1
+
+    gesamt_auslagen = summen["auslagen"]
+    if not belege:
+        t_bel_data.append([
+            Paragraph("–", c_val),
+            Paragraph("Keine Materialauslagen geltend gemacht", c_val),
+            Paragraph("–", c_val),
+            Paragraph("0.00 €", td_right)
+        ])
+    t_bel_data.append([
+        Paragraph("<b>Gesamtsumme Auslagen:</b>", c_val_bold),
+        "",
+        "",
+        Paragraph(f"<b>{gesamt_auslagen:.2f} €</b>", td_right)
+    ])
+
+    t_bel = Table(t_bel_data, colWidths=[75, 250, 98, 100])
+    t_bel.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+        ('GRID', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
+        ('SPAN', (0, -1), (2, -1)),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_bel)
+    elements.append(Spacer(1, 8))
+
+    # 3. Summe & Buchungs-Referenz für Überweisung (Gesamtbreite: 523pt)
+    gesamt = summen["gesamt"]
+    t_sum = Table([["Zur Auszahlung fälliger Gesamtbetrag:", f"{gesamt:.2f} €"]], colWidths=[370, 153])
+    t_sum.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#dcfce7")),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10.5),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor("#14532d")),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor("#16a34a")),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(t_sum)
+    elements.append(Spacer(1, 4))
+
+    # Kasten: Verwendungszweck für Kassenwart-App & Bankauszug
+    ref_string = f"{kid_text} {stamm.get('leiter', '').strip()}"
+    t_ref = Table([
+        ["Empfohlener Verwendungszweck für Überweisung:", Paragraph(f"<b><font size='9' color='#1e3d59'>{ref_string}</font></b>", styles['Normal'])]
+    ], colWidths=[230, 293])
+    t_ref.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(t_ref)
+    elements.append(Spacer(1, 6))
+
+    # 4. Wichtige Hinweise & Ausschlussfrist
+    p_ausschluss = Paragraph(
+        "<b>Wichtige Hinweise & Ausschlussfrist:</b> "
+        "Die Abrechnung für geleistete Stunden hat jeweils blockweise zu erfolgen. Der Abrechnungszeitraum läuft "
+        "vom Tag nach Ferienende bis zum letzten Tag der jeweils kommenden Schulferien bzw. den letzten Schultag "
+        "vor den Sommerferien. Das vollständig ausgefüllte Formular muss spätestens am letzten Tag "
+        "des Abrechnungszeitraums beim Vorstand eingereicht werden. Allerletzte Frist für jegliche Ansprüche aus dem "
+        "laufenden Schuljahr ist der Tag vor Beginn der Sommerferien (Beginn der Kassenprüfung in den Ferien). Später "
+        "eingehende Honorar- oder Aufwandsansprüche können aus budgettechnischen Gründen und aufgrund der Vorgaben zur "
+        "zeitnahen Mittelverwendung für gemeinnützige Vereine nicht mehr berücksichtigt werden und verfallen endgültig. "
+        "Dies nehme ich mit meiner Unterschrift zur Kenntnis.",
+        legal_style
+    )
+    t_disclaimer = Table([[p_ausschluss]], colWidths=[523])
+    t_disclaimer.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_disclaimer)
+    elements.append(Spacer(1, 5))
+
+    # KASTEN 1: Kursleiter (Eigenerklärung & Unterschrift)
+    p_steuer = Paragraph(
+        "<b>Steuerliche Eigenerklärung des Kursleiters (§ 3 Nr. 26 / 26a EStG):</b> "
+        "Ich versichere mit meiner Unterschrift, dass ich die oben abgerechneten Leistungen persönlich und ordnungsgemäß "
+        "erbracht habe. Zudem erkläre ich, dass die Auszahlung im Rahmen des Übungsleiterfreibetrags (§ 3 Nr. 26 EStG) "
+        "bzw. der Ehrenamtspauschale (§ 3 Nr. 26a EStG) erfolgt. Ich bestätige, dass ich die gesetzlichen Jahresfreibeträge "
+        "im laufenden Kalenderjahr – auch in der Summe mit anderen ehrenamtlichen Tätigkeiten für andere Vereine oder "
+        "Institutionen – nicht überschreite. Für die Versteuerung eventueller Mehrbeträge bin ich selbst verantwortlich.",
+        legal_style
+    )
+    t_box_kursleiter = Table([
+        [
+            Paragraph("<b>✍️ 1. Kursleiter / Auftragnehmer (Eigenerklärung & Unterschrift)</b>", c_val_bold),
+            ""
+        ],
+        [
+            p_steuer,
+            ""
+        ],
+        [
+            Paragraph(f"<b>Ort & Datum:</b> Ulm, den {heute_datum_str}", c_val),
+            Paragraph("________________________________________<br/><font size='7' color='#475569'>Unterschrift des Kursleiters</font>", td_right)
+        ]
+    ], colWidths=[240, 283])
+    t_box_kursleiter.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 0)),
+        ('SPAN', (0, 1), (1, 1)),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.65, colors.HexColor("#94a3b8")),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#e2e8f0")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_box_kursleiter)
+    elements.append(Spacer(1, 5))
+
+    # KASTEN 2: Vorstand (Prüfung, Genehmigung & Notizen)
+    t_box_vorstand = Table([
+        [
+            Paragraph("<b>📋 2. Sachlich & rechnerisch geprüft / Auszahlung genehmigt (Vorstand)</b>", c_val_bold),
+            ""
+        ],
+        [
+            Table([
+                [Paragraph("Geprüft & genehmigt am:", c_val),
+                 InteractiveTextField("vorstand_datum", width=85, height=16, tooltip="Prüfdatum des Vorstands (TT.MM.JJJJ)")],
+            ], colWidths=[125, 115]),
+            Table([
+                [Paragraph("Vorstand / Visum:", c_label),
+                 InteractiveTextField("vorstand_signatur", width=120, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Vorstands")]
+            ], colWidths=[110, 133])
+        ],
+        [
+            Table([
+                [Paragraph("<b>Notizen / Prüfvermerk:</b>", c_label),
+                 InteractiveTextField("vorstand_notizen", width=360, height=22, tooltip="Notizen / Prüfvermerk des Vorstands (z. B. Belegkürzungen, fehlende Beträge)")]
+            ], colWidths=[140, 370]),
+            ""
+        ]
+    ], colWidths=[245, 278])
+    t_box_vorstand.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 0)),
+        ('SPAN', (0, 2), (1, 2)),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.65, colors.HexColor("#94a3b8")),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#e2e8f0")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_box_vorstand)
+    elements.append(Spacer(1, 7))
+
+    # KASTEN 3: Kassenwart (Zahlungsanweisung, Ausführung & Notizen)
+    kw_box_data = [
+        [
+            Paragraph("<b>🏦 3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b>", c_val_bold),
+            ""
+        ],
+        [
+            Table([
+                [Paragraph("Angewiesener Betrag:", c_val),
+                 InteractiveTextField("kassenwart_betrag", width=70, height=16, tooltip="Überwiesener Betrag in €"),
+                 Paragraph("€", c_val)]
+            ], colWidths=[110, 75, 15]),
+            Table([
+                [Paragraph("Überwiesen am:", c_val),
+                 InteractiveTextField("kassenwart_datum", width=80, height=16, tooltip="Überweisungsdatum (TT.MM.JJJJ)")],
+                [Paragraph("Kassenwart / Visum:", c_label),
+                 InteractiveTextField("kassenwart_signatur", width=110, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Kassenwarts")]
+            ], colWidths=[105, 120])
+        ],
+        [
+            Table([
+                [Paragraph("<b>Notizen / Buchungsvermerk:</b>", c_label),
+                 InteractiveTextField("kassenwart_notizen", width=360, height=22, tooltip="Notizen / Buchungsvermerk des Kassenwarts (z. B. Kostenstelle, Differenzbegründung)")]
+            ], colWidths=[140, 370]),
+            ""
+        ]
+    ]
+    t_kw = Table(kw_box_data, colWidths=[205, 318])
+    t_kw.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f0fdf4")),
+        ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#16a34a")),
+        ('SPAN', (0, 0), (1, 0)),
+        ('SPAN', (0, 2), (1, 2)),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#bbf7d0")),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#dcfce7")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_kw)
+
+    doc.build(elements)
+
+    # Deckblatt anhängen & AcroForms vollständig erhalten
+    writer = PdfWriter()
+    reader_deckblatt = PdfReader(deckblatt_temp)
+    writer.append(reader_deckblatt)
+
+    # AcroForm-Formularfelder für alle gängigen PDF-Viewer aktivieren
+    try:
+        from pypdf.generic import NameObject, BooleanObject
+        if hasattr(writer, "_root_object") and "/AcroForm" in writer._root_object:
+            writer._root_object["/AcroForm"].update({
+                NameObject("/NeedAppearances"): BooleanObject(True)
+            })
+    except Exception:
+        pass
+
+    beleg_idx = 1
+    for b in belege:
+        d = b.get("datei")
+        if not d or not os.path.exists(d):
+            continue
+
+        ext = os.path.splitext(d)[1].lower()
+        if ext == ".pdf":
+            try:
+                r_bel = PdfReader(d)
+                writer.append(r_bel)
+            except Exception:
+                pass
+        elif ext in [".jpg", ".jpeg", ".png"]:
+            temp_img_pdf = os.path.join(CACHE_DIR, f"temp_bel_{beleg_idx}.pdf")
+            img_doc = SimpleDocTemplate(temp_img_pdf, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+            img_elems = [
+                Paragraph(f"<b>Beleg #{beleg_idx}: {b.get('zweck', '')} ({b.get('betrag', 0.0):.2f} €)</b>", styles['Normal']),
+                Spacer(1, 10)
+            ]
+
+            im = Image.open(d)
+            w, h = im.size
+            scale = min(500 / w, 700 / h, 1.0)
+            from reportlab.platypus import Image as RLImage
+            img_elems.append(RLImage(d, width=w * scale, height=h * scale))
+            img_doc.build(img_elems)
+
+            r_img = PdfReader(temp_img_pdf)
+            writer.append(r_img)
+            if os.path.exists(temp_img_pdf):
+                os.remove(temp_img_pdf)
+
+        beleg_idx += 1
+
+    # Standard-Metadaten für Kassenwart-App
+    writer.add_metadata({
+        "/Title": f"Abrechnung {kurs.get('id', '')} - {kurs.get('titel', '')}",
+        "/Author": stamm.get("leiter", ""),
+        "/Subject": f"Förderverein Abrechnung Kurs-ID: {kurs.get('id', '')}",
+        "/Keywords": f"KursID={kurs.get('id', '')};Betrag={gesamt:.2f};IBAN={stamm.get('iban', '')};Datum={kurs.get('datum', '')}",
+        "/Creator": f"{__app_name__} v{__version__}"
+    })
+
+    # Maschinenlesbares JSON-Attachment für Kassenwart-App & Re-Import
+    meta_payload = {
+        "schema_version": "1.0",
+        "app_version": __version__,
+        "erstellt_am": datetime.now().isoformat(),
+        "stammdaten": {
+            "leiter": stamm.get("leiter", ""),
+            "anschrift": stamm.get("anschrift", ""),
+            "telefon": stamm.get("telefon", ""),
+            "iban": stamm.get("iban", ""),
+            "satz": stamm.get("satz", "0")
+        },
+        "kurs": {
+            "id": kurs.get("id", ""),
+            "titel": kurs.get("titel", ""),
+            "ag": kurs.get("ag", ""),
+            "datum": kurs.get("datum", ""),
+            "dauer": kurs.get("dauer", "0"),
+            "ist_mehrtaegig": bool(kurs.get("ist_mehrtaegig", False)),
+            "termine_anzahl": str(kurs.get("termine_anzahl", "1")),
+            "end_datum": kurs.get("end_datum", "")
+        },
+        "summen": summen,
+        "belege": [
+            {
+                "datum": b.get("datum", ""),
+                "zweck": b.get("zweck", ""),
+                "betrag": b.get("betrag", 0.0),
+                "hat_datei": bool(b.get("datei"))
+            }
+            for b in belege
+        ]
+    }
+    try:
+        json_bytes = json.dumps(meta_payload, ensure_ascii=False, indent=2).encode("utf-8")
+        writer.add_attachment("abrechnungsdaten.json", json_bytes)
+    except Exception:
+        pass
+
+    with open(zielpfad, "wb") as f_out:
+        writer.write(f_out)
+
+    if os.path.exists(deckblatt_temp):
+        os.remove(deckblatt_temp)

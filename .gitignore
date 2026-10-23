@@ -5,6 +5,7 @@ __pycache__/
 # Lokale Anwendungsdaten (Datenschutz: keine Belege/Abrechnungen auf GitHub!)
 cache/
 Exportierte Rechnungen/
+data/
 *.json
 *.pdf
 

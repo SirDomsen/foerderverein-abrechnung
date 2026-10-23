@@ -1,2 +1,0 @@
-pip install pyinstaller customtkinter pillow reportlab pypdf
-pyinstaller --noconsole --onefile --name "AbrechnungsManager" --collect-all customtkinter app_windows.py
