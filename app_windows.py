@@ -31,7 +31,10 @@ class WindowsAbrechnungsApp(ctk.CTk):
             "titel": entwurf.get("titel", ""),
             "ag": entwurf.get("ag", ""),
             "datum": entwurf.get("datum", ""),
-            "dauer": entwurf.get("dauer", "2.0")
+            "dauer": entwurf.get("dauer", "2.0"),
+            "ist_mehrtaegig": bool(entwurf.get("ist_mehrtaegig", False)),
+            "termine_anzahl": str(entwurf.get("termine_anzahl", "1")),
+            "end_datum": entwurf.get("end_datum", "")
         }
         self.belege_liste = entwurf.get("belege", [])
         self.selected_file_path = None
@@ -144,15 +147,45 @@ class WindowsAbrechnungsApp(ctk.CTk):
             "z. B. Klasse 3-4",
             self.kurs.get("ag", "")
         )
+
+        # Checkbox für mehrtägige Kurse
+        self.var_mehrtaegig = ctk.BooleanVar(value=bool(self.kurs.get("ist_mehrtaegig", False)))
+        self.check_mehrtaegig = ctk.CTkCheckBox(
+            kurs_card,
+            text="Kurs fand an mehreren Tagen statt",
+            variable=self.var_mehrtaegig,
+            font=("Arial", 11, "bold"),
+            text_color=("#1e3d59", "#90caf9"),
+            command=self._on_mehrtaegig_toggled
+        )
+        self.check_mehrtaegig.pack(anchor="w", padx=10, pady=(6, 4))
+
         self.entry_kurs_datum = self._create_labeled_entry(
             kurs_card,
             "Datum des Kurstermins (TT.MM.JJJJ):",
             "z. B. 23.10.2026",
             self.kurs.get("datum", "")
         )
+
+        self.frame_mehrtaegig = ctk.CTkFrame(kurs_card, fg_color="transparent")
+        self.entry_termine_anzahl = self._create_labeled_entry(
+            self.frame_mehrtaegig,
+            "Anzahl Termine:",
+            "z. B. 4",
+            str(self.kurs.get("termine_anzahl", "1"))
+        )
+        self.entry_kurs_end_datum = self._create_labeled_entry(
+            self.frame_mehrtaegig,
+            "Enddatum des Kurses (TT.MM.JJJJ):",
+            "z. B. 20.11.2026",
+            self.kurs.get("end_datum", "")
+        )
+        if self.var_mehrtaegig.get():
+            self.frame_mehrtaegig.pack(fill="x", padx=0, pady=0)
+
         self.entry_kurs_dauer = self._create_labeled_entry(
             kurs_card,
-            "Dauer in Stunden (z. B. 2.0 für 120 Min):",
+            "Gesamtdauer in Stunden (z. B. 2.0 oder 8.0):",
             "2.0",
             self.kurs.get("dauer", "2.0")
         )
@@ -160,7 +193,8 @@ class WindowsAbrechnungsApp(ctk.CTk):
         for e in [self.entry_leiter, self.entry_anschrift, self.entry_telefon,
                   self.entry_iban, self.entry_satz,
                   self.entry_kurs_id, self.entry_kurs_titel, self.entry_ag,
-                  self.entry_kurs_datum, self.entry_kurs_dauer]:
+                  self.entry_kurs_datum, self.entry_termine_anzahl, self.entry_kurs_end_datum,
+                  self.entry_kurs_dauer]:
             e.bind("<KeyRelease>", lambda event: self._on_input_changed())
 
         # 3. Materialauslagen & Belege
@@ -361,6 +395,17 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self.entry_kurs_dauer.delete(0, "end")
             self.entry_kurs_dauer.insert(0, str(self.kurs.get("dauer", "2.0")))
 
+            ist_m = bool(self.kurs.get("ist_mehrtaegig", False))
+            self.var_mehrtaegig.set(ist_m)
+            self.entry_termine_anzahl.delete(0, "end")
+            self.entry_termine_anzahl.insert(0, str(self.kurs.get("termine_anzahl", "1")))
+            self.entry_kurs_end_datum.delete(0, "end")
+            self.entry_kurs_end_datum.insert(0, self.kurs.get("end_datum", ""))
+            if ist_m:
+                self.frame_mehrtaegig.pack(fill="x", padx=0, pady=0)
+            else:
+                self.frame_mehrtaegig.pack_forget()
+
         # Belege befüllen
         self.belege_liste = daten.get("belege", [])
 
@@ -372,6 +417,13 @@ class WindowsAbrechnungsApp(ctk.CTk):
 
         kid = self.kurs.get("id") or "Unbekannt"
         messagebox.showinfo("Abrechnung geladen", f"Die Abrechnung '{kid}' wurde erfolgreich geladen!\n\nAlle Felder können nun direkt digital bearbeitet werden.")
+
+    def _on_mehrtaegig_toggled(self):
+        if self.var_mehrtaegig.get():
+            self.frame_mehrtaegig.pack(fill="x", padx=0, pady=0, before=self.entry_kurs_dauer)
+        else:
+            self.frame_mehrtaegig.pack_forget()
+        self._on_input_changed()
 
     def _on_input_changed(self):
         self.stamm["leiter"] = self.entry_leiter.get()
@@ -392,6 +444,9 @@ class WindowsAbrechnungsApp(ctk.CTk):
         self.kurs["ag"] = self.entry_ag.get()
         self.kurs["datum"] = self.entry_kurs_datum.get()
         self.kurs["dauer"] = self.entry_kurs_dauer.get()
+        self.kurs["ist_mehrtaegig"] = bool(self.var_mehrtaegig.get())
+        self.kurs["termine_anzahl"] = self.entry_termine_anzahl.get().strip()
+        self.kurs["end_datum"] = self.entry_kurs_end_datum.get().strip()
 
         core.speichere_stammdaten(self.stamm)
         core.speichere_entwurf(self.kurs, self.belege_liste)
@@ -539,9 +594,20 @@ class WindowsAbrechnungsApp(ctk.CTk):
         kurs_datum_str = self.entry_kurs_datum.get().strip() or "– Kein Datum –"
         leiter_name = self.entry_leiter.get().strip() or "Kursleiter"
 
+        ist_m = bool(self.var_mehrtaegig.get())
+        end_d_str = self.entry_kurs_end_datum.get().strip()
+        termine_anz = self.entry_termine_anzahl.get().strip() or "1"
+
+        if ist_m and end_d_str:
+            termin_anzeige = f"{kurs_datum_str} bis {end_d_str} ({termine_anz} Termine)"
+            pruef_datum_str = end_d_str
+        else:
+            termin_anzeige = kurs_datum_str
+            pruef_datum_str = kurs_datum_str
+
         periode_text = "–"
         warn_text = ""
-        parsed_kd, _ = core.parse_datum(kurs_datum_str, "Kursdatum")
+        parsed_kd, _ = core.parse_datum(pruef_datum_str, "Kursdatum")
         if parsed_kd:
             _, _, p_name = core.ferien_mgr.ermittle_abrechnungszeitraum(parsed_kd)
             periode_text = p_name
@@ -583,7 +649,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
             f" Person:       {leiter_name} ({telefon_val})\n"
             f" Anschrift:    {anschrift_val}\n"
             f" Gruppe/Klasse: {gruppe}\n"
-            f" Termin:       {kurs_datum_str}\n"
+            f" Termin/Zeit:  {termin_anzeige}\n"
             f" Periode (BW): {periode_text}{warn_text}\n"
             f" IBAN:         {iban_status}\n"
             f" ──> Überweisungs-Ref: {kurs_id} {leiter_name}\n"
@@ -621,15 +687,26 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self.entry_kurs_dauer.delete(0, "end")
             self.entry_kurs_dauer.insert(0, "2.0")
 
+            self.var_mehrtaegig.set(False)
+            self.entry_termine_anzahl.delete(0, "end")
+            self.entry_termine_anzahl.insert(0, "1")
+            self.entry_kurs_end_datum.delete(0, "end")
+            self.frame_mehrtaegig.pack_forget()
+
             self.belege_liste.clear()
             core.loesche_entwurf()
             self._belege_karten_rendern()
             self._on_input_changed()
 
     def pdf_erstellen(self):
-        # 1. Kursleiter prüfen
+        # 1. Kursleiter & Anschrift prüfen
         if not self.entry_leiter.get().strip():
             messagebox.showwarning("Plausibilitätsprüfung", "Bitte den Namen des Kursleiters angeben.")
+            return
+
+        anschrift_ok, anschrift_err = core.validiere_anschrift(self.entry_anschrift.get())
+        if not anschrift_ok:
+            messagebox.showwarning("Plausibilitätsprüfung (Anschrift)", anschrift_err)
             return
 
         # 2. IBAN Modulo-97 validieren
@@ -651,21 +728,47 @@ class WindowsAbrechnungsApp(ctk.CTk):
             messagebox.showwarning("Plausibilitätsprüfung", "Bitte den Kurstitel angeben.")
             return
 
-        # 5. Kursdatum prüfen
+        # 5. Kursdatum & Mehrteiligkeit prüfen
         kurs_datum_str = self.entry_kurs_datum.get().strip()
-        kd_parsed, err = core.parse_datum(kurs_datum_str, "Kursdatum")
+        kd_parsed, err = core.parse_datum(kurs_datum_str, "Startdatum / Kurstermin")
         if err:
             messagebox.showwarning("Plausibilitätsprüfung", err)
             return
 
-        # 6. Kursdauer prüfen (1–480 Min)
+        ist_m = bool(self.var_mehrtaegig.get())
+        pruef_datum_obj = kd_parsed
+
+        if ist_m:
+            end_datum_str = self.entry_kurs_end_datum.get().strip()
+            kd_end_parsed, end_err = core.parse_datum(end_datum_str, "Enddatum des Kurses")
+            if end_err:
+                messagebox.showwarning("Plausibilitätsprüfung (Enddatum)", end_err)
+                return
+            if kd_end_parsed < kd_parsed:
+                messagebox.showwarning("Plausibilitätsprüfung", "Das Enddatum des Kurses darf nicht vor dem Startdatum liegen.")
+                return
+
+            termine_str = self.entry_termine_anzahl.get().strip()
+            try:
+                t_count = int(termine_str)
+                if t_count < 2:
+                    messagebox.showwarning("Plausibilitätsprüfung", "Bei mehrtägigen Kursen muss die Anzahl der Termine mindestens 2 betragen.")
+                    return
+            except ValueError:
+                messagebox.showwarning("Plausibilitätsprüfung", "Bitte eine gültige Termin-Anzahl (ganze Zahl >= 2) angeben.")
+                return
+
+            # Bei mehrtägigen Kursen ist das Enddatum für Frist und Abrechnungszeitraum maßgeblich!
+            pruef_datum_obj = kd_end_parsed
+
+        # 6. Kursdauer prüfen
         dauer_ok, _, dauer_err = core.validiere_kurs_dauer(self.entry_kurs_dauer.get())
         if not dauer_ok:
             messagebox.showwarning("Plausibilitätsprüfung (Kursdauer)", dauer_err)
             return
 
         # 7. Plausibilitätsprüfungen zum Kurstermin (Schuljahr, Ferienende-Abrechnungsfenster, Ferien, Wochentag)
-        warnungen = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
+        warnungen = core.pruefe_kursdatum_plausibilitaet(pruef_datum_obj)
         for w in warnungen:
             if w["level"] == "gesperrt":
                 messagebox.showerror(

@@ -4,7 +4,7 @@ Plattformunabhängig für Windows, Web (NiceGUI/FastAPI) und Mobile.
 """
 
 __app_name__ = "Förderverein Grundschule – Abrechnungs-Manager"
-__version__ = "0.5.3"
+__version__ = "0.6.1"
 
 import os
 import re
@@ -272,6 +272,16 @@ def generiere_kurs_id_vorschlag(kurs_titel: str, kurs_datum_str: str = "") -> st
     clean = re.sub(r"[^A-Z0-9]", "", clean)
     kuerzel = clean[:6] if clean else "KURS"
     return f"{sj}-{kuerzel}-01"
+
+
+def validiere_anschrift(anschrift: str) -> Tuple[bool, Optional[str]]:
+    """Prüft, ob eine vollständige Anschrift vorliegt (nicht leer, Straße + Ort)."""
+    s = str(anschrift).strip()
+    if not s:
+        return False, "Bitte die vollständige Anschrift (Straße, Hausnummer, PLZ Ort) angeben."
+    if len(s) < 6:
+        return False, "Die angegebene Anschrift ist unvollständig. Bitte Straße, Hausnummer und PLZ/Ort angeben."
+    return True, None
 
 
 def validiere_kurs_id(kurs_id: str) -> Tuple[bool, Optional[str]]:
@@ -586,7 +596,17 @@ def speichere_stammdaten(stamm: Dict[str, str]) -> None:
 
 
 def lade_entwurf() -> Dict[str, Any]:
-    daten = {"id": "", "titel": "", "ag": "", "datum": "", "dauer": "2.0", "belege": []}
+    daten = {
+        "id": "",
+        "titel": "",
+        "ag": "",
+        "datum": "",
+        "dauer": "2.0",
+        "ist_mehrtaegig": False,
+        "termine_anzahl": "1",
+        "end_datum": "",
+        "belege": []
+    }
     if os.path.exists(FILE_ENTWURF):
         try:
             with open(FILE_ENTWURF, "r", encoding="utf-8") as f:
@@ -603,6 +623,9 @@ def speichere_entwurf(kurs: Dict[str, Any], belege: List[Dict[str, Any]]) -> Non
         "ag": kurs.get("ag", ""),
         "datum": kurs.get("datum", ""),
         "dauer": kurs.get("dauer", "2.0"),
+        "ist_mehrtaegig": bool(kurs.get("ist_mehrtaegig", False)),
+        "termine_anzahl": str(kurs.get("termine_anzahl", "1")),
+        "end_datum": kurs.get("end_datum", ""),
         "belege": belege
     }
     try:
@@ -798,11 +821,12 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
     elements = []
 
     # Kopf
+    heute_datum_str = date.today().strftime("%d.%m.%Y")
     kopf_tabelle = Table([
         [Paragraph("<b>FÖRDERVEREIN DER GRUNDSCHULE E.V.</b>", title_style),
-         Paragraph(f"<font color='#666666'>Abrechnung v{__version__}</font>", styles['Normal'])],
+         Paragraph(f"<font color='#334155'><b>Datum:</b> {heute_datum_str}</font><br/><font color='#94a3b8' size='7'>v{__version__}</font>", th_right)],
         [Paragraph("<i>Abrechnung über Aufwandsentschädigung & Materialauslagen für Schul-AGs</i>", styles['Normal']), ""]
-    ], colWidths=[383, 140])
+    ], colWidths=[370, 153])
     kopf_tabelle.setStyle(TableStyle([
         ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -812,8 +836,31 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
     elements.append(HRFlowable(width="100%", thickness=2, color=FARBE_SEK, spaceAfter=8))
 
     # Stammdaten & Kurs-Referenz (Gesamtbreite: 523pt)
-    parsed_kd, _ = parse_datum(kurs.get("datum", ""), "Kursdatum")
+    ist_mehrtaegig = bool(kurs.get("ist_mehrtaegig", False))
+    start_d_str = (kurs.get("datum", "") or "").strip()
+    end_d_str = (kurs.get("end_datum", "") or "").strip()
+    anz_termine = str(kurs.get("termine_anzahl", "1") or "1").strip()
+
+    pruef_datum_str = end_d_str if (ist_mehrtaegig and end_d_str) else start_d_str
+    parsed_kd, _ = parse_datum(pruef_datum_str, "Kursdatum")
     _, _, p_name = ferien_mgr.ermittle_abrechnungszeitraum(parsed_kd) if parsed_kd else (None, None, "–")
+
+    if ist_mehrtaegig and end_d_str:
+        termin_label = "Kurszeitraum:"
+        termin_text = f"{start_d_str} – {end_d_str} ({anz_termine} Termine)"
+    else:
+        termin_label = "Kurstermin:"
+        termin_text = start_d_str or "–"
+
+    # Weiche Warnung (Abrechnungszeitraum überschritten, Vorstandsgenehmigung nötig):
+    # Kurstermin in ROT drucken!
+    warnungen_kd = pruefe_kursdatum_plausibilitaet(parsed_kd) if parsed_kd else []
+    hat_weiche_warnung = any(w["level"] == "vorstand" for w in warnungen_kd)
+
+    if hat_weiche_warnung:
+        p_termin = Paragraph(f"<font color='#dc2626'><b>{termin_text}</b></font>", c_val)
+    else:
+        p_termin = Paragraph(termin_text, c_val)
 
     formatiertes_iban = formatiere_iban(stamm.get("iban", "")) or "–"
     kid_text = kurs.get("id", "").strip() or "–"
@@ -842,8 +889,8 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         [
             Paragraph("IBAN:", c_label),
             Paragraph(formatiertes_iban, c_val),
-            Paragraph("Kurstermin:", c_label),
-            Paragraph(kurs.get("datum", "") or "–", c_val)
+            Paragraph(termin_label, c_label),
+            p_termin
         ],
         [
             Paragraph("Stundensatz:", c_label),
@@ -983,7 +1030,7 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
     elements.append(t_ref)
     elements.append(Spacer(1, 6))
 
-    # 4. Wichtige Hinweise & Steuerliche Eigenerklärung
+    # 4. Wichtige Hinweise & Ausschlussfrist
     p_ausschluss = Paragraph(
         "<b>Wichtige Hinweise & Ausschlussfrist:</b> "
         "Die Abrechnung für geleistete Stunden hat jeweils blockweise zu erfolgen. Der Abrechnungszeitraum läuft "
@@ -996,8 +1043,21 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         "Dies nehme ich mit meiner Unterschrift zur Kenntnis.",
         legal_style
     )
+    t_disclaimer = Table([[p_ausschluss]], colWidths=[523])
+    t_disclaimer.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_disclaimer)
+    elements.append(Spacer(1, 5))
+
+    # KASTEN 1: Kursleiter (Eigenerklärung & Unterschrift)
     p_steuer = Paragraph(
-        "<b>Steuerliche Eigenerklärung (§ 3 Nr. 26 / 26a EStG):</b> "
+        "<b>Steuerliche Eigenerklärung des Kursleiters (§ 3 Nr. 26 / 26a EStG):</b> "
         "Ich versichere mit meiner Unterschrift, dass ich die oben abgerechneten Leistungen persönlich und ordnungsgemäß "
         "erbracht habe. Zudem erkläre ich, dass die Auszahlung im Rahmen des Übungsleiterfreibetrags (§ 3 Nr. 26 EStG) "
         "bzw. der Ehrenamtspauschale (§ 3 Nr. 26a EStG) erfolgt. Ich bestätige, dass ich die gesetzlichen Jahresfreibeträge "
@@ -1005,70 +1065,110 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         "Institutionen – nicht überschreite. Für die Versteuerung eventueller Mehrbeträge bin ich selbst verantwortlich.",
         legal_style
     )
-    t_legal = Table([[p_ausschluss], [p_steuer]], colWidths=[523])
-    t_legal.setStyle(TableStyle([
+    t_box_kursleiter = Table([
+        [
+            Paragraph("<b>✍️ 1. Kursleiter / Auftragnehmer (Eigenerklärung & Unterschrift)</b>", c_val_bold),
+            ""
+        ],
+        [
+            p_steuer,
+            ""
+        ],
+        [
+            Paragraph(f"<b>Ort & Datum:</b> Ulm, den {heute_datum_str}", c_val),
+            Paragraph("________________________________________<br/><font size='7' color='#475569'>Unterschrift des Kursleiters</font>", td_right)
+        ]
+    ], colWidths=[240, 283])
+    t_box_kursleiter.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 0)),
+        ('SPAN', (0, 1), (1, 1)),
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
-        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#e2e8f0")),
-        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('BOX', (0, 0), (-1, -1), 0.65, colors.HexColor("#94a3b8")),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#e2e8f0")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('LEFTPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
-    elements.append(t_legal)
-    elements.append(Spacer(1, 8))
+    elements.append(t_box_kursleiter)
+    elements.append(Spacer(1, 5))
 
-    # 5. Unterschriften (Kursleiter & Vorstand)
-    t_sig = Table([
-        ["________________________________________", "________________________________________"],
-        ["Ort, Datum & Unterschrift Kursleiter", "Sachlich und rechnerisch richtig / Genehmigt (Vorstand)"]
-    ], colWidths=[256, 267])
-    t_sig.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTSIZE', (0, 1), (-1, 1), 7.5),
-        ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor("#334155")),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+    # KASTEN 2: Vorstand (Prüfung, Genehmigung & Notizen)
+    t_box_vorstand = Table([
+        [
+            Paragraph("<b>📋 2. Sachlich & rechnerisch geprüft / Auszahlung genehmigt (Vorstand)</b>", c_val_bold),
+            ""
+        ],
+        [
+            Table([
+                [Paragraph("Geprüft & genehmigt am:", c_val),
+                 InteractiveTextField("vorstand_datum", width=80, height=16, tooltip="Prüfdatum des Vorstands (TT.MM.JJJJ)")],
+                [Paragraph("Vorstand / Visum:", c_label),
+                 InteractiveTextField("vorstand_signatur", width=110, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Vorstands")]
+            ], colWidths=[120, 115]),
+            Table([
+                [Paragraph("<b>Notizen / Prüfvermerk Vorstand:</b> <font size='6.5' color='#64748b'><i>(z. B. Belegkürzungen, fehlende Beträge)</i></font>", styles['Normal'])],
+                [InteractiveTextField("vorstand_notizen", width=275, height=20, tooltip="Notizen des Vorstands zu Belegen oder Betragskürzungen")]
+            ], colWidths=[275])
+        ]
+    ], colWidths=[240, 283])
+    t_box_vorstand.setStyle(TableStyle([
+        ('SPAN', (0, 0), (1, 0)),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.65, colors.HexColor("#94a3b8")),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
-    elements.append(t_sig)
-    elements.append(Spacer(1, 8))
+    elements.append(t_box_vorstand)
+    elements.append(Spacer(1, 5))
 
-    # 6. Kassenwart-Auszahlungsfeld mit INTERAKTIVEN AcroForm-Feldern
+    # KASTEN 3: Kassenwart (Zahlungsanweisung, Ausführung & Notizen)
     kw_box_data = [
         [
-            Paragraph("<b>🏦 Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b> (digital ausfüllbar)", c_val_bold),
+            Paragraph("<b>🏦 3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b> (digital ausfüllbar)", c_val_bold),
             ""
         ],
         [
             Table([
                 [Paragraph("Angewiesener Betrag:", c_val),
-                 InteractiveTextField("kassenwart_betrag", width=75, height=16, tooltip="Überweisener Betrag in €"),
-                 Paragraph("€", c_val)]
-            ], colWidths=[105, 80, 15]),
+                 InteractiveTextField("kassenwart_betrag", width=70, height=16, tooltip="Überwiesener Betrag in €"),
+                 Paragraph("€", c_val)],
+                [Paragraph("<font color='#64748b' size='6.5'><i>(bei Kürzung abweichend)</i></font>", styles['Normal']), "", ""]
+            ], colWidths=[110, 75, 15]),
             Table([
                 [Paragraph("Überwiesen am:", c_val),
-                 InteractiveTextField("kassenwart_datum", width=85, height=16, tooltip="Überweisungsdatum (TT.MM.JJJJ)")]
-            ], colWidths=[75, 90])
+                 InteractiveTextField("kassenwart_datum", width=80, height=16, tooltip="Überweisungsdatum (TT.MM.JJJJ)")],
+                [Paragraph("Kassenwart / Visum:", c_label),
+                 InteractiveTextField("kassenwart_signatur", width=110, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Kassenwarts")]
+            ], colWidths=[105, 120])
         ],
         [
-            Paragraph("<font color='#64748b' size='7'><i>(Betrag kann bei Abschlägen / Korrekturen vom PDF-Gesamtbetrag abweichen)</i></font>", styles['Normal']),
             Table([
-                [Paragraph("Kassenwart / Visum:", c_label),
-                 InteractiveTextField("kassenwart_signatur", width=120, height=16, tooltip="Datum, Unterschrift oder Namenskürzel des Kassenwarts")]
-            ], colWidths=[90, 125])
+                [Paragraph("<b>Buchungsvermerk / Notizen Kassenwart:</b>", c_label),
+                 InteractiveTextField("kassenwart_notizen", width=335, height=16, tooltip="Buchungsvermerk / Notiz Kassenwart (z. B. Kostenstelle, Differenzbegründung)")]
+            ], colWidths=[170, 345]),
+            ""
         ]
     ]
-    t_kw = Table(kw_box_data, colWidths=[265, 258])
+    t_kw = Table(kw_box_data, colWidths=[220, 303])
     t_kw.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
-        ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#94a3b8")),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f0fdf4")),
+        ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#16a34a")),
         ('SPAN', (0, 0), (1, 0)),
-        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('SPAN', (0, 2), (1, 2)),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#bbf7d0")),
+        ('LINEBELOW', (0, 1), (-1, 1), 0.5, colors.HexColor("#dcfce7")),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_kw)
 
@@ -1140,6 +1240,8 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         "erstellt_am": datetime.now().isoformat(),
         "stammdaten": {
             "leiter": stamm.get("leiter", ""),
+            "anschrift": stamm.get("anschrift", ""),
+            "telefon": stamm.get("telefon", ""),
             "iban": stamm.get("iban", ""),
             "satz": stamm.get("satz", "0")
         },
@@ -1148,7 +1250,10 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
             "titel": kurs.get("titel", ""),
             "ag": kurs.get("ag", ""),
             "datum": kurs.get("datum", ""),
-            "dauer": kurs.get("dauer", "0")
+            "dauer": kurs.get("dauer", "0"),
+            "ist_mehrtaegig": bool(kurs.get("ist_mehrtaegig", False)),
+            "termine_anzahl": str(kurs.get("termine_anzahl", "1")),
+            "end_datum": kurs.get("end_datum", "")
         },
         "summen": summen,
         "belege": [

@@ -106,11 +106,30 @@ def index():
                 ui.input(placeholder='z. B. Klasse 3-4', on_change=lambda e: (kurs.update(ag=e.value), autosave(), update_summary())) \
                     .bind_value(kurs, 'ag').classes('w-full')
 
-                ui.label("Datum des Kurstermins (TT.MM.JJJJ):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                def on_mehrtaegig_change(e):
+                    kurs.update(ist_mehrtaegig=e.value)
+                    mehrtaegig_container.set_visibility(e.value)
+                    autosave()
+                    update_summary()
+
+                ui.checkbox("Kurs fand an mehreren Tagen statt", value=bool(kurs.get("ist_mehrtaegig", False)), on_change=on_mehrtaegig_change).classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+
+                ui.label("Startdatum des Kurses (TT.MM.JJJJ):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
                 ui.input(placeholder='z. B. 23.10.2026', on_change=lambda e: (kurs.update(datum=e.value), autosave(), update_summary())) \
                     .bind_value(kurs, 'datum').classes('w-full')
 
-                ui.label("Dauer in Stunden (z. B. 2.0 für 120 Min):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                with ui.column().classes('w-full p-0 gap-0') as mehrtaegig_container:
+                    ui.label("Anzahl Termine:").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                    ui.input(placeholder='z. B. 4', on_change=lambda e: (kurs.update(termine_anzahl=e.value), autosave(), update_summary())) \
+                        .bind_value(kurs, 'termine_anzahl').classes('w-full')
+
+                    ui.label("Enddatum des Kurses (TT.MM.JJJJ):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                    ui.input(placeholder='z. B. 20.11.2026', on_change=lambda e: (kurs.update(end_datum=e.value), autosave(), update_summary())) \
+                        .bind_value(kurs, 'end_datum').classes('w-full')
+
+                mehrtaegig_container.set_visibility(bool(kurs.get("ist_mehrtaegig", False)))
+
+                ui.label("Gesamtdauer in Stunden (z. B. 2.0 oder 8.0):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
                 ui.input(placeholder='2.0', on_change=lambda e: (kurs.update(dauer=e.value), autosave(), update_summary())) \
                     .bind_value(kurs, 'dauer').classes('w-full')
 
@@ -241,6 +260,7 @@ def index():
                                     if kurs_neu:
                                         kurs.update(kurs_neu)
                                         kurs_id_input.value = kurs.get("id", "")
+                                        mehrtaegig_container.set_visibility(bool(kurs.get("ist_mehrtaegig", False)))
 
                                     belege.clear()
                                     belege.extend(daten.get("belege", []))
@@ -266,8 +286,9 @@ def index():
                                     ui.button("Abbrechen", on_click=dialog.close).classes('bg-gray-400 text-white')
 
                                     def confirm():
-                                        kurs.update(id="", titel="", ag="", datum="", dauer="2.0")
+                                        kurs.update(id="", titel="", ag="", datum="", dauer="2.0", ist_mehrtaegig=False, termine_anzahl="1", end_datum="")
                                         kurs_id_input.value = ""
+                                        mehrtaegig_container.set_visibility(False)
                                         belege.clear()
                                         core.loesche_entwurf()
                                         render_belege()
@@ -285,7 +306,18 @@ def index():
                 def update_summary():
                     summen = core.berechne_summen(kurs["dauer"], stamm["satz"], belege)
 
-                    kd_parsed, _ = core.parse_datum(kurs["datum"] or "", "Kursdatum")
+                    ist_m = bool(kurs.get("ist_mehrtaegig", False))
+                    start_d = kurs.get("datum") or "–"
+                    end_d = kurs.get("end_datum") or ""
+                    anz_t = kurs.get("termine_anzahl") or "1"
+                    if ist_m and end_d:
+                        termin_anzeige = f"{start_d} bis {end_d} ({anz_t} Termine)"
+                        pruef_datum_str = end_d
+                    else:
+                        termin_anzeige = start_d
+                        pruef_datum_str = kurs.get("datum") or ""
+
+                    kd_parsed, _ = core.parse_datum(pruef_datum_str, "Kursdatum")
                     periode_text = "–"
                     warn_status_text = ""
                     if kd_parsed:
@@ -330,7 +362,7 @@ def index():
                         f"PERSON:       {leiter_anzeige} ({telefon_anzeige})",
                         f"ANSCHRIFT:    {anschrift_anzeige}",
                         f"KLASSE:       {kurs['ag'] or '–'}",
-                        f"TERMIN:       {kurs['datum'] or '–'}",
+                        f"TERMIN/ZEIT:  {termin_anzeige}",
                         f"PERIODE (BW): {periode_text}{warn_status_text}",
                         f"IBAN:         {iban_text}",
                         f"──> Ref-Zweck: {kid_anzeige} {leiter_anzeige}",
@@ -361,6 +393,12 @@ def index():
                         ui.notify("Bitte Kursleiter angeben.", color='negative')
                         return
 
+                    # Anschrift prüfen (Pflichtfeld)
+                    anschrift_ok, anschrift_err = core.validiere_anschrift(stamm.get("anschrift", ""))
+                    if not anschrift_ok:
+                        ui.notify(anschrift_err, color='negative')
+                        return
+
                     # Modulo-97 IBAN-Validierung
                     iban_ok, iban_err = core.validiere_iban(stamm.get("iban", ""))
                     if not iban_ok:
@@ -377,10 +415,31 @@ def index():
                         ui.notify("Bitte Kurstitel angeben.", color='negative')
                         return
 
-                    kd_parsed, err = core.parse_datum(kurs["datum"] or "", "Kursdatum")
+                    kd_parsed, err = core.parse_datum(kurs["datum"] or "", "Startdatum / Kurstermin")
                     if err:
                         ui.notify(err, color='negative')
                         return
+
+                    ist_m = bool(kurs.get("ist_mehrtaegig", False))
+                    pruef_datum_obj = kd_parsed
+
+                    if ist_m:
+                        end_str = (kurs.get("end_datum") or "").strip()
+                        kd_end, end_err = core.parse_datum(end_str, "Enddatum des Kurses")
+                        if end_err:
+                            ui.notify(end_err, color='negative')
+                            return
+                        if kd_end < kd_parsed:
+                            ui.notify("Das Enddatum darf nicht vor dem Startdatum liegen.", color='negative')
+                            return
+                        try:
+                            if int(kurs.get("termine_anzahl", "1")) < 2:
+                                ui.notify("Bei mehrtägigen Kursen muss die Anzahl der Termine mindestens 2 betragen.", color='negative')
+                                return
+                        except ValueError:
+                            ui.notify("Bitte eine gültige Termin-Anzahl (ganze Zahl >= 2) angeben.", color='negative')
+                            return
+                        pruef_datum_obj = kd_end
 
                     # Kursdauer prüfen
                     dauer_ok, _, dauer_err = core.validiere_kurs_dauer(kurs.get("dauer", "0"))
@@ -389,7 +448,7 @@ def index():
                         return
 
                     # Kursdatum Plausibilität (Schuljahr, Ferienende-Fenster, Ferien, Wochentag)
-                    warnungen = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
+                    warnungen = core.pruefe_kursdatum_plausibilitaet(pruef_datum_obj)
                     blockiert = False
                     for w in warnungen:
                         if w["level"] == "gesperrt":
