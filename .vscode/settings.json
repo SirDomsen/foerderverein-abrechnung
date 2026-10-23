@@ -10,6 +10,14 @@
         "singleInstance": true,
         "focus": true,
         "command": "python -m PyInstaller --noconsole --onefile --name AbrechnungsManager --collect-all customtkinter app_windows.py"
+      },
+      {
+        "name": "$(browser) Start Web-App",
+        "color": "#38bdf8",
+        "tooltip": "Startet den NiceGUI Webserver (app_web.py)",
+        "singleInstance": true,
+        "focus": true,
+        "command": "python app_web.py"
       }
     ]
   }
