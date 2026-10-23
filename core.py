@@ -4,7 +4,7 @@ Plattformunabhängig für Windows, Web (NiceGUI/FastAPI) und Mobile.
 """
 
 __app_name__ = "Förderverein Grundschule – Abrechnungs-Manager"
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 import os
 import re
@@ -170,9 +170,51 @@ class FerienManagerBW:
                 return f["name"]
         return None
 
+    def ermittle_schuljahr_details(self, datum: date) -> Tuple[str, date, date, date]:
+        """
+        Ermittelt das dynamische Schuljahr anhand der BW-Sommerferien:
+        - Beginn: Tag nach Ende der Sommerferien des Vorjahres
+        - Ende: Letzter Tag der Sommerferien des aktuellen Jahres
+        - Letzter Schultag / Ausschlussfrist für Einreichungen: Tag vor Beginn der Sommerferien (Kassenprüfung)
+        Rückgabe: (sj_code, sj_start, sj_ende, letzter_schultag_vor_sommerferien)
+        """
+        sommer_liste = [f for f in self.ferien_liste if "sommer" in f["name"].lower()]
+        sommer_liste.sort(key=lambda x: x["start"])
+
+        for i, sf in enumerate(sommer_liste):
+            if datum <= sf["end"]:
+                sf_vor = sommer_liste[i - 1] if i > 0 else None
+                if sf_vor:
+                    sj_start = sf_vor["end"] + timedelta(days=1)
+                else:
+                    sj_start = date(sf["start"].year - 1, 9, 10)
+
+                sj_ende = sf["end"]
+                letzter_schultag = sf["start"] - timedelta(days=1)
+                start_y = (sf["start"].year - 1) % 100
+                end_y = sf["start"].year % 100
+                sj_code = f"SJ{start_y:02d}{end_y:02d}"
+                return sj_code, sj_start, sj_ende, letzter_schultag
+
+        # Fallback falls datum hinter den bekannten Sommerferien liegt
+        y = datum.year
+        if datum.month >= 8:
+            start_y, end_y = y % 100, (y + 1) % 100
+            sj_start = date(y, 9, 12)
+            sj_ende = date(y + 1, 9, 11)
+            letzter_tag = date(y + 1, 7, 28)
+        else:
+            start_y, end_y = (y - 1) % 100, y % 100
+            sj_start = date(y - 1, 9, 12)
+            sj_ende = date(y, 9, 11)
+            letzter_tag = date(y, 7, 28)
+        return f"SJ{start_y:02d}{end_y:02d}", sj_start, sj_ende, letzter_tag
+
     def ermittle_abrechnungszeitraum(self, kurs_datum: date) -> Tuple[Optional[date], Optional[date], str]:
         """
-        Ermittelt das Fenster 'Ferienende vorherige Ferien' bis 'Ferienende Folgeferien'.
+        Ermittelt das Fenster 'Tag nach Ferienende vorherige Ferien' bis 'letzter Tag Folgeferien'.
+        Besonderheit: Vor den Sommerferien endet der Abrechnungszeitraum am Tag VOR Beginn der
+        Sommerferien (letzter Schultag), da in den Sommerferien bereits die Kassenprüfung stattfindet.
         Rückgabe: (start_datum, end_datum, bezeichnung_string)
         """
         if not self.ferien_liste:
@@ -189,10 +231,19 @@ class FerienManagerBW:
 
         if vor_ferien and folge_ferien:
             p_start = vor_ferien["end"] + timedelta(days=1)
-            p_ende = folge_ferien["end"]
-            return p_start, p_ende, f"Ende {vor_ferien['name']} bis Ende {folge_ferien['name']}"
+            is_sommer = "sommer" in folge_ferien["name"].lower()
+            if is_sommer:
+                p_ende = folge_ferien["start"] - timedelta(days=1)
+                p_name = f"Ende {vor_ferien['name']} bis Beginn {folge_ferien['name']} (letzter Schultag)"
+            else:
+                p_ende = folge_ferien["end"]
+                p_name = f"Ende {vor_ferien['name']} bis Ende {folge_ferien['name']}"
+            return p_start, p_ende, p_name
         elif folge_ferien:
-            return folge_ferien["start"] - timedelta(days=60), folge_ferien["end"], f"Bis Ende {folge_ferien['name']}"
+            is_sommer = "sommer" in folge_ferien["name"].lower()
+            p_ende = (folge_ferien["start"] - timedelta(days=1)) if is_sommer else folge_ferien["end"]
+            p_start = folge_ferien["start"] - timedelta(days=60)
+            return p_start, p_ende, f"Bis {folge_ferien['name']}"
         elif vor_ferien:
             return vor_ferien["end"] + timedelta(days=1), vor_ferien["end"] + timedelta(days=70), f"Ab Ende {vor_ferien['name']}"
 
@@ -206,15 +257,9 @@ ferien_mgr = FerienManagerBW()
 # 2. VALIDIERUNG & DATEN-HILFSFUNKTIONEN
 # ==============================================================================
 def ermittle_schuljahr(datum: date) -> str:
-    """Gibt das Schuljahr als 'SJyyzz' zurück (z.B. SJ2627 für Schuljahr 2026/2027). Stichtag 1. August."""
-    y = datum.year
-    if datum.month >= 8:
-        start_y = y % 100
-        end_y = (y + 1) % 100
-    else:
-        start_y = (y - 1) % 100
-        end_y = y % 100
-    return f"SJ{start_y:02d}{end_y:02d}"
+    """Gibt das Schuljahr als 'SJyyzz' zurück (z.B. SJ2627). Dynamisch anhand der BW-Sommerferien."""
+    code, _, _, _ = ferien_mgr.ermittle_schuljahr_details(datum)
+    return code
 
 
 def generiere_kurs_id_vorschlag(kurs_titel: str, kurs_datum_str: str = "") -> str:
@@ -299,41 +344,71 @@ def pruefe_wochenende(pruef_datum: date) -> Optional[str]:
 def pruefe_kursdatum_plausibilitaet(kurs_datum: date, einreich_datum: Optional[date] = None) -> List[Dict[str, str]]:
     """
     Validiert das Kursdatum anhand der BW-Ferien und Schuljahresregeln:
-    1. Harte Warnung: Einreichung außerhalb des laufenden Schuljahrs (Abrechnungsfrist verpasst).
-    2. Weiche Warnung: Einreichung nach Ablauf des regulären Abrechnungszeitraums (Ferienende bis Ferienende), aber noch im laufenden Schuljahr.
-    3. Ferien-Warnung: Kurstag fällt direkt in Schulferien (BW).
-    4. Wochenend-Warnung: Kurstag fällt auf Samstag/Sonntag.
+    1. Sperre: Einreichung außerhalb des aktuellen Schuljahres oder nach Beginn der Kassenprüfung
+       (letzter Tag vor Beginn der Sommerferien). Export wird vollständig gesperrt!
+    2. Vorstandsgenehmigung: Einreichung nach Ablauf des regulären Abrechnungszeitraums,
+       aber noch vor Beginn der Kassenprüfung im laufenden Schuljahr.
+    3. Hinweis: Kurstag fällt in Schulferien oder auf ein Wochenende.
 
-    Rückgabe: Liste von Warnungs-Dicts: [{"level": "hart"|"weich", "titel": "...", "nachricht": "..."}]
+    Rückgabe: Liste von Warnungs-Dicts: [{"level": "gesperrt"|"vorstand"|"hinweis", "titel": "...", "nachricht": "..."}]
     """
     heute = einreich_datum or date.today()
     warnungen: List[Dict[str, str]] = []
 
-    kurs_sj = ermittle_schuljahr(kurs_datum)
-    aktuelles_sj = ermittle_schuljahr(heute)
+    kurs_sj, k_start, k_ende, k_letzter_tag = ferien_mgr.ermittle_schuljahr_details(kurs_datum)
+    akt_sj, a_start, a_ende, a_letzter_tag = ferien_mgr.ermittle_schuljahr_details(heute)
 
-    # 1. Schuljahr-Prüfung: Liegt der Termin in einem vergangenen Schuljahr? -> HARTE WARNUNG
-    if kurs_datum < heute and kurs_sj != aktuelles_sj:
+    # 1. Sperre: Kurstermin in vergangenem Schuljahr ODER heute nach Kassenprüfungsstart für das Kurs-Schuljahr
+    if kurs_datum < heute:
+        # Fall A: Kurs lag in einem vergangenen Schuljahr
+        if kurs_sj != akt_sj and kurs_datum < a_start:
+            warnungen.append({
+                "level": "gesperrt",
+                "titel": "Frist endgültig abgelaufen (Schuljahr beendet)",
+                "nachricht": (
+                    f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) liegt im abgelaufenen Schuljahr ({kurs_sj}).\n"
+                    f"Die allerletzte Frist für Einreichungen endete am {k_letzter_tag.strftime('%d.%m.%Y')} vor Beginn der Sommerferien.\n\n"
+                    f"Da die Kassenprüfung bereits stattgefunden hat, können Honorar- und Aufwandsansprüche aus budgettechnischen Gründen und aufgrund der Vorgaben zur zeitnahen Mittelverwendung für gemeinnützige Vereine nicht mehr berücksichtigt werden und sind endgültig verfallen.\n\n"
+                    f"Das Erzeugen der Abrechnungs-PDF ist gesperrt."
+                )
+            })
+            return warnungen
+
+        # Fall B: Kurs liegt im aktuellen Schuljahr, aber Einreichung erfolgt NACH dem letzten Schultag (Kassenprüfung läuft in den Sommerferien)
+        if kurs_sj == akt_sj and heute > k_letzter_tag:
+            warnungen.append({
+                "level": "gesperrt",
+                "titel": "Frist endgültig abgelaufen (Ausschlussfrist / Kassenprüfung)",
+                "nachricht": (
+                    f"Die allerletzte Frist zur Einreichung für das laufende Schuljahr ({kurs_sj}) endete am {k_letzter_tag.strftime('%d.%m.%Y')} vor Beginn der Sommerferien.\n\n"
+                    f"Da die Kassenprüfung bereits läuft, können verspätete Ansprüche nicht mehr berücksichtigt werden und sind endgültig verfallen.\n\n"
+                    f"Das Erzeugen der Abrechnungs-PDF ist gesperrt."
+                )
+            })
+            return warnungen
+
+    # Fall C: Kurstermin liegt in einem zukünftigen Schuljahr
+    if kurs_datum > a_ende:
         warnungen.append({
-            "level": "hart",
-            "titel": "Abrechnungszeitraum verpasst (Schuljahr abgelaufen)",
+            "level": "gesperrt",
+            "titel": "Kurstermin im zukünftigen Schuljahr",
             "nachricht": (
-                f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) liegt im vorherigen Schuljahr ({kurs_sj}).\n"
-                f"Die reguläre Frist zur Abrechnung im laufenden Schuljahr ({aktuelles_sj}) ist bereits abgelaufen.\n\n"
-                f"Eine Abrechnung erfordert die ausdrückliche Sondergenehmigung des Vorstands."
+                f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) liegt im zukünftigen Schuljahr ({kurs_sj}).\n"
+                f"Abrechnungen können erst im jeweiligen Schuljahr eingereicht werden."
             )
         })
+        return warnungen
 
-    # 2. Abrechnungszeitraum: Grundsätzlich Ferienende bis Ferienende -> WEICHE WARNUNG
+    # 2. Vorstandsgenehmigung: Abrechnungszeitraum abgelaufen, aber noch im aktuellen Schuljahr vor Kassenprüfung
     p_start, p_ende, p_name = ferien_mgr.ermittle_abrechnungszeitraum(kurs_datum)
-    if p_ende and heute > p_ende and kurs_sj == aktuelles_sj:
+    if p_ende and heute > p_ende and kurs_sj == akt_sj and heute <= k_letzter_tag:
         warnungen.append({
-            "level": "weich",
-            "titel": "Abrechnungszeitraum überschritten (Weiche Warnung)",
+            "level": "vorstand",
+            "titel": "Abrechnungszeitraum überschritten (Vorstandsgenehmigung erforderlich)",
             "nachricht": (
                 f"Der Kurstermin ({kurs_datum.strftime('%d.%m.%Y')}) gehört zum Abrechnungszeitraum '{p_name}'.\n"
-                f"Das reguläre Zeitfenster endete am {p_ende.strftime('%d.%m.%Y')}.\n\n"
-                f"Da der Termin noch im laufenden Schuljahr ({aktuelles_sj}) liegt, kann die Abrechnung eingereicht werden."
+                f"Die reguläre Einreichungsfrist endete am {p_ende.strftime('%d.%m.%Y')}.\n\n"
+                f"Da die reguläre Frist abgelaufen ist, erfordert die Abrechnung eine ausdrückliche Genehmigung durch den Vorstand."
             )
         })
 
@@ -341,7 +416,7 @@ def pruefe_kursdatum_plausibilitaet(kurs_datum: date, einreich_datum: Optional[d
     ferien_name = ferien_mgr.pruefe_in_ferien(kurs_datum)
     if ferien_name:
         warnungen.append({
-            "level": "weich",
+            "level": "hinweis",
             "titel": "Kurstag in den Ferien",
             "nachricht": (
                 f"Der Kurstag ({kurs_datum.strftime('%d.%m.%Y')}) liegt in den {ferien_name} (BW).\n\n"
@@ -353,7 +428,7 @@ def pruefe_kursdatum_plausibilitaet(kurs_datum: date, einreich_datum: Optional[d
     wochenend_tag = pruefe_wochenende(kurs_datum)
     if wochenend_tag:
         warnungen.append({
-            "level": "weich",
+            "level": "hinweis",
             "titel": "Kurstag am Wochenende",
             "nachricht": (
                 f"Der Kurstag ({kurs_datum.strftime('%d.%m.%Y')}) fällt auf einen {wochenend_tag}.\n\n"
@@ -492,7 +567,7 @@ def generiere_standard_dateinamen(kurs_datum_str: str, kurs_titel: str, kursleit
 # 3. AUTOSAVE & PERSISTENZ (JSON)
 # ==============================================================================
 def lade_stammdaten() -> Dict[str, str]:
-    daten = {"leiter": "", "iban": "", "satz": "20.00"}
+    daten = {"leiter": "", "anschrift": "", "telefon": "", "iban": "", "satz": "20.00"}
     if os.path.exists(FILE_STAMM):
         try:
             with open(FILE_STAMM, "r", encoding="utf-8") as f:
@@ -712,6 +787,13 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         textColor=colors.HexColor("#0f172a"),
         fontName='Helvetica'
     )
+    legal_style = ParagraphStyle(
+        'LegalText',
+        parent=styles['Normal'],
+        fontSize=6.2,
+        leading=8.2,
+        textColor=colors.HexColor("#334155")
+    )
 
     elements = []
 
@@ -726,8 +808,8 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     elements.append(kopf_tabelle)
-    elements.append(Spacer(1, 8))
-    elements.append(HRFlowable(width="100%", thickness=2, color=FARBE_SEK, spaceAfter=12))
+    elements.append(Spacer(1, 6))
+    elements.append(HRFlowable(width="100%", thickness=2, color=FARBE_SEK, spaceAfter=8))
 
     # Stammdaten & Kurs-Referenz (Gesamtbreite: 523pt)
     parsed_kd, _ = parse_datum(kurs.get("datum", ""), "Kursdatum")
@@ -735,46 +817,54 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
 
     formatiertes_iban = formatiere_iban(stamm.get("iban", "")) or "–"
     kid_text = kurs.get("id", "").strip() or "–"
+    anschrift_text = stamm.get("anschrift", "").strip() or "–"
+    telefon_text = stamm.get("telefon", "").strip() or "–"
 
     stamm_rows = [
         [
-            Paragraph("Kursleiter / Auftragnehmer:", c_label),
+            Paragraph("Kursleiter / Person:", c_label),
             Paragraph(stamm.get("leiter", "") or "–", c_val_bold),
             Paragraph("Kurs-ID / Referenz:", c_label),
             Paragraph(kid_text, c_val_bold)
         ],
         [
-            Paragraph("IBAN:", c_label),
-            Paragraph(formatiertes_iban, c_val),
+            Paragraph("Anschrift:", c_label),
+            Paragraph(anschrift_text, c_val),
             Paragraph("Kurstitel:", c_label),
             Paragraph(kurs.get("titel", "") or "–", c_val)
         ],
         [
-            Paragraph("Stundensatz:", c_label),
-            Paragraph(f"{stamm.get('satz', '0')} €/h", c_val),
+            Paragraph("Telefon / E-Mail:", c_label),
+            Paragraph(telefon_text, c_val),
             Paragraph("Gruppe / Klasse:", c_label),
             Paragraph(kurs.get("ag", "") or "–", c_val)
         ],
         [
+            Paragraph("IBAN:", c_label),
+            Paragraph(formatiertes_iban, c_val),
             Paragraph("Kurstermin:", c_label),
-            Paragraph(kurs.get("datum", "") or "–", c_val),
+            Paragraph(kurs.get("datum", "") or "–", c_val)
+        ],
+        [
+            Paragraph("Stundensatz:", c_label),
+            Paragraph(f"{stamm.get('satz', '0')} €/h", c_val),
             Paragraph("Abrechnungszeitraum:", c_label),
             Paragraph(p_name, c_val)
         ]
     ]
-    t_stamm = Table(stamm_rows, colWidths=[120, 145, 110, 148])
+    t_stamm = Table(stamm_rows, colWidths=[115, 150, 110, 148])
     t_stamm.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), FARBE_BG_HELL),
         ('BOX', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
         ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
         ('LEFTPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_stamm)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 8))
 
     # 1. Leistung (Gesamtbreite: 523pt)
     summen = berechne_summen(kurs.get("dauer", "0"), stamm.get("satz", "0"), belege)
@@ -885,30 +975,65 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
         ('LEFTPADDING', (0, 0), (-1, -1), 8),
         ('RIGHTPADDING', (0, 0), (-1, -1), 8),
     ]))
     elements.append(t_ref)
-    elements.append(Spacer(1, 16))
+    elements.append(Spacer(1, 6))
 
-    # 4. Unterschriften (Kursleiter & Vorstand)
+    # 4. Wichtige Hinweise & Steuerliche Eigenerklärung
+    p_ausschluss = Paragraph(
+        "<b>Wichtige Hinweise & Ausschlussfrist:</b> "
+        "Die Abrechnung für geleistete Stunden hat jeweils blockweise zu erfolgen. Der Abrechnungszeitraum läuft "
+        "vom Tag nach Ferienende bis zum letzten Tag der jeweils kommenden Schulferien bzw. den letzten Schultag "
+        "vor den Sommerferien. Das vollständig ausgefüllte Formular muss spätestens am letzten Tag "
+        "des Abrechnungszeitraums beim Vorstand eingereicht werden. Allerletzte Frist für jegliche Ansprüche aus dem "
+        "laufenden Schuljahr ist der Tag vor Beginn der Sommerferien (Beginn der Kassenprüfung in den Ferien). Später "
+        "eingehende Honorar- oder Aufwandsansprüche können aus budgettechnischen Gründen und aufgrund der Vorgaben zur "
+        "zeitnahen Mittelverwendung für gemeinnützige Vereine nicht mehr berücksichtigt werden und verfallen endgültig. "
+        "Dies nehme ich mit meiner Unterschrift zur Kenntnis.",
+        legal_style
+    )
+    p_steuer = Paragraph(
+        "<b>Steuerliche Eigenerklärung (§ 3 Nr. 26 / 26a EStG):</b> "
+        "Ich versichere mit meiner Unterschrift, dass ich die oben abgerechneten Leistungen persönlich und ordnungsgemäß "
+        "erbracht habe. Zudem erkläre ich, dass die Auszahlung im Rahmen des Übungsleiterfreibetrags (§ 3 Nr. 26 EStG) "
+        "bzw. der Ehrenamtspauschale (§ 3 Nr. 26a EStG) erfolgt. Ich bestätige, dass ich die gesetzlichen Jahresfreibeträge "
+        "im laufenden Kalenderjahr – auch in der Summe mit anderen ehrenamtlichen Tätigkeiten für andere Vereine oder "
+        "Institutionen – nicht überschreite. Für die Versteuerung eventueller Mehrbeträge bin ich selbst verantwortlich.",
+        legal_style
+    )
+    t_legal = Table([[p_ausschluss], [p_steuer]], colWidths=[523])
+    t_legal.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#e2e8f0")),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(t_legal)
+    elements.append(Spacer(1, 8))
+
+    # 5. Unterschriften (Kursleiter & Vorstand)
     t_sig = Table([
         ["________________________________________", "________________________________________"],
-        ["Datum, Unterschrift Kursleiter", "Datum, Sachlich & rechnerisch richtig (Vorstand)"]
+        ["Ort, Datum & Unterschrift Kursleiter", "Sachlich und rechnerisch richtig / Genehmigt (Vorstand)"]
     ], colWidths=[256, 267])
     t_sig.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTSIZE', (0, 1), (-1, 1), 8),
+        ('FONTSIZE', (0, 1), (-1, 1), 7.5),
         ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor("#334155")),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
         ('TOPPADDING', (0, 0), (-1, -1), 2),
     ]))
     elements.append(t_sig)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 8))
 
-    # 5. Kassenwart-Auszahlungsfeld mit INTERAKTIVEN AcroForm-Feldern
+    # 6. Kassenwart-Auszahlungsfeld mit INTERAKTIVEN AcroForm-Feldern
     kw_box_data = [
         [
             Paragraph("<b>🏦 Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b> (digital ausfüllbar)", c_val_bold),

@@ -68,6 +68,18 @@ class WindowsAbrechnungsApp(ctk.CTk):
             "z. B. Maria Musterfrau",
             self.stamm.get("leiter", "")
         )
+        self.entry_anschrift = self._create_labeled_entry(
+            stamm_card,
+            "Anschrift (Straße, Hausnr., PLZ Ort):",
+            "z. B. Musterstr. 1, 70123 Stuttgart",
+            self.stamm.get("anschrift", "")
+        )
+        self.entry_telefon = self._create_labeled_entry(
+            stamm_card,
+            "Telefonnummer / E-Mail:",
+            "z. B. 0170 1234567",
+            self.stamm.get("telefon", "")
+        )
         self.entry_iban = self._create_labeled_entry(
             stamm_card,
             "IBAN (deutsches Girokonto, 22 Stellen):",
@@ -145,7 +157,8 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self.kurs.get("dauer", "2.0")
         )
 
-        for e in [self.entry_leiter, self.entry_iban, self.entry_satz,
+        for e in [self.entry_leiter, self.entry_anschrift, self.entry_telefon,
+                  self.entry_iban, self.entry_satz,
                   self.entry_kurs_id, self.entry_kurs_titel, self.entry_ag,
                   self.entry_kurs_datum, self.entry_kurs_dauer]:
             e.bind("<KeyRelease>", lambda event: self._on_input_changed())
@@ -324,6 +337,10 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self.stamm.update(stamm_neu)
             self.entry_leiter.delete(0, "end")
             self.entry_leiter.insert(0, self.stamm.get("leiter", ""))
+            self.entry_anschrift.delete(0, "end")
+            self.entry_anschrift.insert(0, self.stamm.get("anschrift", ""))
+            self.entry_telefon.delete(0, "end")
+            self.entry_telefon.insert(0, self.stamm.get("telefon", ""))
             self.entry_iban.delete(0, "end")
             self.entry_iban.insert(0, self.stamm.get("iban", ""))
             self.entry_satz.delete(0, "end")
@@ -358,6 +375,8 @@ class WindowsAbrechnungsApp(ctk.CTk):
 
     def _on_input_changed(self):
         self.stamm["leiter"] = self.entry_leiter.get()
+        self.stamm["anschrift"] = self.entry_anschrift.get()
+        self.stamm["telefon"] = self.entry_telefon.get()
         self.stamm["iban"] = self.entry_iban.get()
         self.stamm["satz"] = self.entry_satz.get()
 
@@ -529,7 +548,12 @@ class WindowsAbrechnungsApp(ctk.CTk):
             k_warns = core.pruefe_kursdatum_plausibilitaet(parsed_kd)
             if k_warns:
                 for w in k_warns:
-                    icon = "⛔" if w["level"] == "hart" else "⚠️"
+                    if w["level"] == "gesperrt":
+                        icon = "⛔"
+                    elif w["level"] == "vorstand":
+                        icon = "⚠️"
+                    else:
+                        icon = "ℹ️"
                     warn_text += f"\n  {icon} {w['titel']}"
             else:
                 warn_text = "\n  ✓ Im regulären Abrechnungszeitraum"
@@ -540,6 +564,9 @@ class WindowsAbrechnungsApp(ctk.CTk):
             iban_status = f"{core.formatiere_iban(iban_str)} (Gültig ✓)" if iban_ok else f"{iban_str} (Prüfung ausstehend / Ungültig ⚠)"
         else:
             iban_status = "– Nicht angegeben –"
+
+        anschrift_val = self.entry_anschrift.get().strip() or "– Nicht angegeben –"
+        telefon_val = self.entry_telefon.get().strip() or "– Nicht angegeben –"
 
         # Fester Dateiname als Vorschau
         fester_name = core.generiere_standard_dateinamen(
@@ -553,6 +580,8 @@ class WindowsAbrechnungsApp(ctk.CTk):
             f"═══════════════════════════════════════════════════════\n"
             f" KURS-ID:      {kurs_id}\n"
             f" KURS:         {kurs_titel}\n"
+            f" Person:       {leiter_name} ({telefon_val})\n"
+            f" Anschrift:    {anschrift_val}\n"
             f" Gruppe/Klasse: {gruppe}\n"
             f" Termin:       {kurs_datum_str}\n"
             f" Periode (BW): {periode_text}{warn_text}\n"
@@ -638,17 +667,23 @@ class WindowsAbrechnungsApp(ctk.CTk):
         # 7. Plausibilitätsprüfungen zum Kurstermin (Schuljahr, Ferienende-Abrechnungsfenster, Ferien, Wochentag)
         warnungen = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
         for w in warnungen:
-            if w["level"] == "hart":
-                msg = (
-                    f"⛔ HARTE WARNUNG: {w['titel']}!\n\n"
-                    f"{w['nachricht']}\n\n"
-                    f"Möchtest du die Abrechnung trotzdem fortsetzen?"
+            if w["level"] == "gesperrt":
+                messagebox.showerror(
+                    w["titel"],
+                    f"{w['nachricht']}\n\nEin PDF-Export ist nicht möglich."
                 )
-                if not messagebox.askyesno("Abrechnungsfrist verpasst", msg, icon="warning"):
+                return
+            elif w["level"] == "vorstand":
+                msg = (
+                    f"⚠️ {w['titel']}:\n\n"
+                    f"{w['nachricht']}\n\n"
+                    f"Möchtest du die Abrechnung zur Einreichung beim Vorstand erstellen?"
+                )
+                if not messagebox.askyesno(w["titel"], msg, icon="warning"):
                     return
             else:
                 msg = (
-                    f"⚠️ {w['titel']}:\n\n"
+                    f"ℹ️ {w['titel']}:\n\n"
                     f"{w['nachricht']}\n\n"
                     f"Möchtest du fortfahren?"
                 )

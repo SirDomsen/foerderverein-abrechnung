@@ -53,6 +53,14 @@ def index():
                 ui.input(placeholder='z. B. Maria Musterfrau', on_change=lambda e: (stamm.update(leiter=e.value), autosave(), update_summary())) \
                     .bind_value(stamm, 'leiter').classes('w-full')
 
+                ui.label("Anschrift (Straße, Hausnr., PLZ Ort):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                ui.input(placeholder='z. B. Musterstr. 1, 70123 Stuttgart', on_change=lambda e: (stamm.update(anschrift=e.value), autosave(), update_summary())) \
+                    .bind_value(stamm, 'anschrift').classes('w-full')
+
+                ui.label("Telefonnummer / E-Mail:").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
+                ui.input(placeholder='z. B. 0170 1234567', on_change=lambda e: (stamm.update(telefon=e.value), autosave(), update_summary())) \
+                    .bind_value(stamm, 'telefon').classes('w-full')
+
                 ui.label("IBAN (deutsches Girokonto, 22 Stellen):").classes('text-xs font-semibold text-slate-700 mt-2 mb-0.5')
                 ui.input(placeholder='DE89 3704 0044 0532 0130 00', on_change=lambda e: (stamm.update(iban=e.value), autosave(), update_summary())) \
                     .bind_value(stamm, 'iban').classes('w-full')
@@ -286,7 +294,12 @@ def index():
                         warns = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
                         if warns:
                             for w in warns:
-                                icon = "⛔" if w["level"] == "hart" else "⚠️"
+                                if w["level"] == "gesperrt":
+                                    icon = "⛔"
+                                elif w["level"] == "vorstand":
+                                    icon = "⚠️"
+                                else:
+                                    icon = "ℹ️"
                                 warn_status_text += f"\n  {icon} {w['titel']}"
                         else:
                             warn_status_text = "\n  ✓ Im regulären Abrechnungszeitraum"
@@ -300,6 +313,8 @@ def index():
 
                     kid_anzeige = kurs.get("id") or "– Noch keine Kurs-ID –"
                     leiter_anzeige = stamm.get("leiter") or "Kursleiter"
+                    anschrift_anzeige = stamm.get("anschrift") or "–"
+                    telefon_anzeige = stamm.get("telefon") or "–"
 
                     fester_name = core.generiere_standard_dateinamen(
                         kurs["datum"],
@@ -312,6 +327,8 @@ def index():
                         "=" * 45,
                         f"KURS-ID:      {kid_anzeige}",
                         f"KURS:         {kurs['titel'] or '–'}",
+                        f"PERSON:       {leiter_anzeige} ({telefon_anzeige})",
+                        f"ANSCHRIFT:    {anschrift_anzeige}",
                         f"KLASSE:       {kurs['ag'] or '–'}",
                         f"TERMIN:       {kurs['datum'] or '–'}",
                         f"PERIODE (BW): {periode_text}{warn_status_text}",
@@ -373,10 +390,18 @@ def index():
 
                     # Kursdatum Plausibilität (Schuljahr, Ferienende-Fenster, Ferien, Wochentag)
                     warnungen = core.pruefe_kursdatum_plausibilitaet(kd_parsed)
+                    blockiert = False
                     for w in warnungen:
-                        color = 'negative' if w["level"] == "hart" else 'warning'
-                        icon = "⛔ " if w["level"] == "hart" else "⚠️ "
-                        ui.notify(f"{icon}{w['titel']}: {w['nachricht'].splitlines()[0]}", color=color, timeout=7000)
+                        if w["level"] == "gesperrt":
+                            ui.notify(f"⛔ {w['titel']}: {w['nachricht'].splitlines()[0]}", color='negative', timeout=9000)
+                            blockiert = True
+                        elif w["level"] == "vorstand":
+                            ui.notify(f"⚠️ {w['titel']}: {w['nachricht'].splitlines()[0]}", color='warning', timeout=7000)
+                        else:
+                            ui.notify(f"ℹ️ {w['titel']}: {w['nachricht'].splitlines()[0]}", color='info', timeout=5000)
+
+                    if blockiert:
+                        return
 
                     # Fester Dateiname nach Kassenwart-Schema
                     pdf_filename = core.generiere_standard_dateinamen(
