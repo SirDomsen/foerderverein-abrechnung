@@ -4,7 +4,7 @@ Plattformunabhängig für Windows, Web (NiceGUI/FastAPI) und Mobile.
 """
 
 __app_name__ = "Förderverein Grundschule – Abrechnungs-Manager"
-__version__ = "0.2.0"
+__version__ = "0.5.1"
 
 import os
 import re
@@ -17,7 +17,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Flowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from pypdf import PdfWriter, PdfReader
 
@@ -160,12 +160,122 @@ ferien_mgr = FerienManagerBW()
 # ==============================================================================
 # 2. VALIDIERUNG & DATEN-HILFSFUNKTIONEN
 # ==============================================================================
+def ermittle_schuljahr(datum: date) -> str:
+    """Gibt das Schuljahr als 'SJyyzz' zurück (z.B. SJ2627 für Schuljahr 2026/2027). Stichtag 1. August."""
+    y = datum.year
+    if datum.month >= 8:
+        start_y = y % 100
+        end_y = (y + 1) % 100
+    else:
+        start_y = (y - 1) % 100
+        end_y = y % 100
+    return f"SJ{start_y:02d}{end_y:02d}"
+
+
+def generiere_kurs_id_vorschlag(kurs_titel: str, kurs_datum_str: str = "") -> str:
+    """Erzeugt einen eindeutigen ID-Vorschlag wie 'SJ2627-SCHACH-01' nach Option 1."""
+    kd_parsed, _ = parse_datum(kurs_datum_str, "Kursdatum")
+    d = kd_parsed or date.today()
+    sj = ermittle_schuljahr(d)
+
+    clean = clean_filename(kurs_titel).upper()
+    clean = re.sub(r"[^A-Z0-9]", "", clean)
+    kuerzel = clean[:6] if clean else "KURS"
+    return f"{sj}-{kuerzel}-01"
+
+
+def validiere_kurs_id(kurs_id: str) -> Tuple[bool, Optional[str]]:
+    """Prüft, ob die Kurs-ID angegeben und zulässig aufgebaut ist."""
+    s = str(kurs_id).strip()
+    if not s:
+        return False, "Bitte eine Kurs-ID angeben (z. B. SJ2627-SCHACH-01)."
+    if not re.match(r"^[A-Za-z0-9_-]{3,30}$", s):
+        return False, "Die Kurs-ID darf nur aus Buchstaben, Ziffern und Bindestrichen bestehen (3–30 Zeichen)."
+    return True, None
+
+
+def validiere_iban(iban: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validiert eine 22-stellige deutsche IBAN nach ISO 7064 (Modulo 97-10).
+    Prüft:
+      1. Nicht leer
+      2. Genau 22 Stellen (nach Entfernung von Leerzeichen)
+      3. Start mit Länder-Code 'DE'
+      4. Nach 'DE' genau 20 Ziffern (2 Prüfziffern + 8 BLZ + 10 Kontonummer)
+      5. Modulo-97-Prüfsumme == 1
+    Rückgabe: (ist_gueltig, fehlermeldung_oder_none)
+    """
+    if not iban or not isinstance(iban, str):
+        return False, "Bitte eine IBAN angeben."
+
+    cleaned = iban.replace(" ", "").strip().upper()
+    if not cleaned:
+        return False, "Bitte eine IBAN angeben."
+
+    if len(cleaned) != 22:
+        return False, f"Eine deutsche IBAN muss genau 22 Zeichen lang sein (aktuell: {len(cleaned)} Zeichen)."
+
+    if not cleaned.startswith("DE"):
+        return False, "Es werden aktuell nur deutsche IBANs unterstützt (muss mit 'DE' beginnen)."
+
+    if not cleaned[2:].isdigit():
+        return False, "Die deutsche IBAN darf nach 'DE' nur aus 20 Ziffern bestehen."
+
+    # ISO 7064 Modulo 97-10 Algorithmus:
+    rearranged = cleaned[4:] + cleaned[:4]
+    num_str = "".join(str(ord(c) - 55) if c.isalpha() else c for c in rearranged)
+
+    try:
+        if int(num_str) % 97 != 1:
+            return False, "Ungültige IBAN-Prüfsumme (Prüfziffern stimmen nicht. Bitte auf Tippfehler prüfen)."
+    except ValueError:
+        return False, "IBAN konnte nicht numerisch validiert werden."
+
+    return True, None
+
+
+def formatiere_iban(iban: str) -> str:
+    """Formatiert eine IBAN in übersichtliche 4er-Blöcke (z. B. DE89 3704 0044 0532 0130 00)."""
+    cleaned = iban.replace(" ", "").strip().upper()
+    if not cleaned:
+        return ""
+    return " ".join(cleaned[i:i + 4] for i in range(0, len(cleaned), 4))
+
+
+def pruefe_wochenende(pruef_datum: date) -> Optional[str]:
+    """Prüft, ob ein Datum auf Samstag oder Sonntag fällt."""
+    if pruef_datum.weekday() == 5:
+        return "Samstag"
+    elif pruef_datum.weekday() == 6:
+        return "Sonntag"
+    return None
+
+
+def validiere_kurs_dauer(dauer_str: str) -> Tuple[bool, float, Optional[str]]:
+    """
+    Prüft die Kursdauer auf das zulässige Intervall von 1 bis 480 Minuten (ca. 0.02 bis 8.0 Std.).
+    Rückgabe: (ist_ok, dauer_in_stunden, fehlermeldung_oder_none)
+    """
+    try:
+        val = float(str(dauer_str).replace(",", ".").strip())
+    except (ValueError, AttributeError):
+        return False, 0.0, "Bitte eine gültige Kursdauer in Stunden angeben (z. B. 2.0 oder 1.5)."
+
+    minuten = val * 60.0
+    if minuten < 1:
+        return False, val, "Die Kursdauer muss mindestens 1 Minute betragen."
+    if minuten > 480:
+        return False, val, "Die Kursdauer darf maximal 480 Minuten (8.0 Stunden) pro Abrechnungstag betragen."
+
+    return True, val, None
+
+
 def parse_datum(datum_str: str, feldname: str = "Datum") -> Tuple[Optional[date], Optional[str]]:
     """
     Parst deutsche Formate (TT.MM.JJJJ, TT.MM.JJ) oder ISO (JJJJ-MM-TT).
     Verhindert Datumsangaben in der Zukunft.
     """
-    s = datum_str.strip()
+    s = str(datum_str).strip()
     if not s:
         return None, f"Bitte ein {feldname} angeben."
 
@@ -188,7 +298,7 @@ def parse_datum(datum_str: str, feldname: str = "Datum") -> Tuple[Optional[date]
 
 def clean_filename(name: str) -> str:
     """Bereinigt Strings für Dateinamen (keine unerlaubten Sonderzeichen)."""
-    clean = re.sub(r"[^a-zA-Z0-9äöüÄÖÜß_-]", "_", name.strip())
+    clean = re.sub(r"[^a-zA-Z0-9äöüÄÖÜß_-]", "_", str(name).strip())
     clean = re.sub(r"_+", "_", clean)
     return clean.strip("_")
 
@@ -231,12 +341,12 @@ def pruefe_beleg_plausibilitaet(beleg_datum: date, kurs_datum: Optional[date]) -
 def berechne_summen(kurs_dauer_str: str, stundensatz_str: str, belege: List[Dict[str, Any]]) -> Dict[str, float]:
     """Berechnet Arbeitsstunden, Honorar, Materialauslagen und Gesamtsumme."""
     try:
-        dauer = float(kurs_dauer_str.replace(",", "."))
+        dauer = float(str(kurs_dauer_str).replace(",", "."))
     except (ValueError, AttributeError):
         dauer = 0.0
 
     try:
-        satz = float(stundensatz_str.replace(",", "."))
+        satz = float(str(stundensatz_str).replace(",", "."))
     except (ValueError, AttributeError):
         satz = 0.0
 
@@ -253,13 +363,16 @@ def berechne_summen(kurs_dauer_str: str, stundensatz_str: str, belege: List[Dict
     }
 
 
-def generiere_standard_dateinamen(kurs_datum_str: str, kurs_titel: str, kursleiter: str) -> str:
-    """Erzeugt das Schema: Abrechnung_JJJJ-MM-TT_Kurstitel_Kursleiter.pdf."""
+def generiere_standard_dateinamen(kurs_datum_str: str, kurs_titel: str, kursleiter: str, kurs_id: str = "") -> str:
+    """
+    Erzeugt das feste Schema für Kassenwart-Apps:
+    Abrechnung_[KursID]_[JJJJ-MM-TT]_[Kursleiter].pdf
+    """
     kd_parsed, _ = parse_datum(kurs_datum_str, "Kursdatum")
     datum_str = kd_parsed.strftime("%Y-%m-%d") if kd_parsed else date.today().strftime("%Y-%m-%d")
-    t_clean = clean_filename(kurs_titel) or "Kurs"
+    kid_clean = clean_filename(kurs_id).upper() if kurs_id else "KURS"
     l_clean = clean_filename(kursleiter) or "Abrechnung"
-    return f"Abrechnung_{datum_str}_{t_clean}_{l_clean}.pdf"
+    return f"Abrechnung_{kid_clean}_{datum_str}_{l_clean}.pdf"
 
 
 # ==============================================================================
@@ -285,7 +398,7 @@ def speichere_stammdaten(stamm: Dict[str, str]) -> None:
 
 
 def lade_entwurf() -> Dict[str, Any]:
-    daten = {"titel": "", "ag": "", "datum": "", "dauer": "2.0", "belege": []}
+    daten = {"id": "", "titel": "", "ag": "", "datum": "", "dauer": "2.0", "belege": []}
     if os.path.exists(FILE_ENTWURF):
         try:
             with open(FILE_ENTWURF, "r", encoding="utf-8") as f:
@@ -297,6 +410,7 @@ def lade_entwurf() -> Dict[str, Any]:
 
 def speichere_entwurf(kurs: Dict[str, Any], belege: List[Dict[str, Any]]) -> None:
     payload = {
+        "id": kurs.get("id", ""),
         "titel": kurs.get("titel", ""),
         "ag": kurs.get("ag", ""),
         "datum": kurs.get("datum", ""),
@@ -318,8 +432,95 @@ def loesche_entwurf() -> None:
             pass
 
 
+def lese_abrechnung_aus_pdf(pdf_quelle: Any) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Liest eingebettete Abrechnungsdaten (abrechnungsdaten.json) aus einem bestehenden PDF aus.
+    Ermöglicht das nahtlose Wiederöffnen und digitale Weiterbearbeiten alter Abrechnungen.
+    Rückgabe: (erfolg, daten_dict, fehlermeldung_oder_none)
+    """
+    try:
+        reader = PdfReader(pdf_quelle)
+
+        # 1. Prüfen auf Attachment 'abrechnungsdaten.json'
+        if hasattr(reader, "attachments") and reader.attachments:
+            for name, val in reader.attachments.items():
+                if name == "abrechnungsdaten.json":
+                    data = None
+                    if isinstance(val, list) and len(val) > 0:
+                        item = val[0]
+                        data = getattr(item, "data", None) or (item if isinstance(item, (bytes, bytearray)) else None)
+                    elif hasattr(val, "data"):
+                        data = val.data
+                    elif isinstance(val, (bytes, bytearray)):
+                        data = val
+                    if data:
+                        daten = json.loads(data.decode("utf-8"))
+                        return True, daten, None
+
+        # 2. Fallback: Metadaten
+        meta = reader.metadata
+        if meta and meta.get("/Keywords") and "KursID=" in meta.get("/Keywords", ""):
+            kw = meta.get("/Keywords", "")
+            kid = ""
+            for part in kw.split(";"):
+                if part.startswith("KursID="):
+                    kid = part.split("=", 1)[1]
+            return True, {
+                "stammdaten": {"leiter": meta.get("/Author", ""), "iban": "", "satz": "20.00"},
+                "kurs": {"id": kid, "titel": meta.get("/Title", ""), "ag": "", "datum": "", "dauer": "2.0"},
+                "belege": []
+            }, None
+
+        return False, None, "In dieser PDF wurden keine maschinenlesbaren Abrechnungsdaten gefunden."
+    except Exception as ex:
+        return False, None, f"Fehler beim Einlesen der PDF: {str(ex)}"
+
+
 # ==============================================================================
-# 4. PDF-GENERIERUNG & BELEG-MERGE
+# 4. REPORTLAB INTERAKTIVE FORMULARFELDER (ACROFORMS)
+# ==============================================================================
+class InteractiveTextField(Flowable):
+    """
+    Platypus Flowable für interaktive PDF-Formularfelder (AcroForms).
+    Ermöglicht direktes Ausfüllen per Tastatur in Adobe Acrobat, Edge, Chrome etc.
+    """
+    def __init__(self, name: str, width: float = 100, height: float = 14, default: str = "", tooltip: str = "", border_style: str = "solid"):
+        super().__init__()
+        self.name = name
+        self.width = width
+        self.height = height
+        self.default = default
+        self.tooltip = tooltip or name
+        self.border_style = border_style
+
+    def wrap(self, availWidth, availHeight):
+        return self.width, self.height
+
+    def draw(self):
+        try:
+            self.canv.acroForm.textfield(
+                name=self.name,
+                tooltip=self.tooltip,
+                x=0,
+                y=0,
+                width=self.width,
+                height=self.height,
+                value=self.default,
+                borderStyle=self.border_style,
+                borderColor=colors.HexColor("#94a3b8"),
+                fillColor=colors.HexColor("#ffffff"),
+                textColor=colors.HexColor("#0f172a"),
+                fontSize=8.5
+            )
+        except Exception:
+            # Fallback bei Viewern ohne AcroForm-Support: Saubere Unterstrichlinie
+            self.canv.setStrokeColor(colors.HexColor("#94a3b8"))
+            self.canv.setLineWidth(0.75)
+            self.canv.line(0, 1, self.width, 1)
+
+
+# ==============================================================================
+# 5. PDF-GENERIERUNG & BELEG-MERGE
 # ==============================================================================
 def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: List[Dict[str, Any]], zielpfad: str) -> None:
     """Rendert Deckblatt und hängt alle hinterlegten Belege (Bilder oder PDFs) hinten an."""
@@ -335,9 +536,61 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
     title_style = ParagraphStyle(
         'TitleStyle',
         parent=styles['Heading1'],
-        fontSize=16,
-        leading=20,
+        fontSize=15,
+        leading=18,
         textColor=FARBE_PRIM
+    )
+
+    # Styles für Tabellenzellen, um Überlappungen absolut zu verhindern
+    c_label = ParagraphStyle(
+        'CLabel',
+        parent=styles['Normal'],
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#475569"),
+        fontName='Helvetica-Bold'
+    )
+    c_val = ParagraphStyle(
+        'CVal',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica'
+    )
+    c_val_bold = ParagraphStyle(
+        'CValBold',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica-Bold'
+    )
+    th_left = ParagraphStyle(
+        'THLeft',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica-Bold'
+    )
+    th_right = ParagraphStyle(
+        'THRight',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        alignment=2,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica-Bold'
+    )
+    td_right = ParagraphStyle(
+        'TDRight',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=10.5,
+        alignment=2,
+        textColor=colors.HexColor("#0f172a"),
+        fontName='Helvetica'
     )
 
     elements = []
@@ -347,120 +600,249 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         [Paragraph("<b>FÖRDERVEREIN DER GRUNDSCHULE E.V.</b>", title_style),
          Paragraph(f"<font color='#666666'>Abrechnung v{__version__}</font>", styles['Normal'])],
         [Paragraph("<i>Abrechnung über Aufwandsentschädigung & Materialauslagen für Schul-AGs</i>", styles['Normal']), ""]
-    ], colWidths=[380, 140])
+    ], colWidths=[383, 140])
     kopf_tabelle.setStyle(TableStyle([
         ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
     elements.append(kopf_tabelle)
-    elements.append(Spacer(1, 10))
-    elements.append(HRFlowable(width="100%", thickness=2, color=FARBE_SEK, spaceAfter=15))
+    elements.append(Spacer(1, 8))
+    elements.append(HRFlowable(width="100%", thickness=2, color=FARBE_SEK, spaceAfter=12))
 
-    # Stammdaten
+    # Stammdaten & Kurs-Referenz (Gesamtbreite: 523pt)
     parsed_kd, _ = parse_datum(kurs.get("datum", ""), "Kursdatum")
     _, _, p_name = ferien_mgr.ermittle_abrechnungszeitraum(parsed_kd) if parsed_kd else (None, None, "–")
 
+    formatiertes_iban = formatiere_iban(stamm.get("iban", "")) or "–"
+    kid_text = kurs.get("id", "").strip() or "–"
+
     stamm_rows = [
-        ["Kursleiter / Auftragnehmer:", stamm.get("leiter", "") or "–", "Kurstitel:", kurs.get("titel", "") or "–"],
-        ["IBAN:", stamm.get("iban", "") or "–", "Gruppe / Klasse:", kurs.get("ag", "") or "–"],
-        ["Vereinbarter Stundensatz:", f"{stamm.get('satz', '0')} €/h", "Abrechnungszeitraum:", p_name]
+        [
+            Paragraph("Kursleiter / Auftragnehmer:", c_label),
+            Paragraph(stamm.get("leiter", "") or "–", c_val_bold),
+            Paragraph("Kurs-ID / Referenz:", c_label),
+            Paragraph(kid_text, c_val_bold)
+        ],
+        [
+            Paragraph("IBAN:", c_label),
+            Paragraph(formatiertes_iban, c_val),
+            Paragraph("Kurstitel:", c_label),
+            Paragraph(kurs.get("titel", "") or "–", c_val)
+        ],
+        [
+            Paragraph("Stundensatz:", c_label),
+            Paragraph(f"{stamm.get('satz', '0')} €/h", c_val),
+            Paragraph("Gruppe / Klasse:", c_label),
+            Paragraph(kurs.get("ag", "") or "–", c_val)
+        ],
+        [
+            Paragraph("Kurstermin:", c_label),
+            Paragraph(kurs.get("datum", "") or "–", c_val),
+            Paragraph("Abrechnungszeitraum:", c_label),
+            Paragraph(p_name, c_val)
+        ]
     ]
-    t_stamm = Table(stamm_rows, colWidths=[140, 160, 110, 110])
+    t_stamm = Table(stamm_rows, colWidths=[120, 145, 110, 148])
     t_stamm.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), FARBE_BG_HELL),
         ('BOX', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
         ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_stamm)
-    elements.append(Spacer(1, 15))
+    elements.append(Spacer(1, 12))
 
-    # 1. Leistung
+    # 1. Leistung (Gesamtbreite: 523pt)
     summen = berechne_summen(kurs.get("dauer", "0"), stamm.get("satz", "0"), belege)
     dauer = summen["dauer"]
     honorar = summen["honorar"]
 
     elements.append(Paragraph("<b>1. Erbrachte Kursleistung</b>", styles['Heading3']))
     t_std = Table([
-        ["Datum", "Kursbezeichnung / Inhalt", "Dauer", "Honoraranspruch"],
-        [kurs.get("datum", ""), f"{kurs.get('titel', '')} ({kurs.get('ag', '')})", f"{dauer:.2f} Std.", f"{honorar:.2f} €"]
-    ], colWidths=[80, 260, 90, 90])
+        [
+            Paragraph("Datum", th_left),
+            Paragraph("Kursbezeichnung / Inhalt", th_left),
+            Paragraph("Dauer", th_right),
+            Paragraph("Honoraranspruch", th_right)
+        ],
+        [
+            Paragraph(kurs.get("datum", ""), c_val),
+            Paragraph(f"{kurs.get('titel', '')} ({kurs.get('ag', '')})", c_val),
+            Paragraph(f"{dauer:.2f} Std.", td_right),
+            Paragraph(f"{honorar:.2f} €", td_right)
+        ]
+    ], colWidths=[75, 260, 88, 100])
     t_std.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
         ('GRID', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
         ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_std)
-    elements.append(Spacer(1, 15))
+    elements.append(Spacer(1, 12))
 
-    # 2. Auslagen
+    # 2. Auslagen (Gesamtbreite: 523pt)
     elements.append(Paragraph("<b>2. Auslagen für Kursmaterialien</b>", styles['Heading3']))
-    t_bel_data = [["Datum", "Händler / Verwendungszweck", "Belegnachweis", "Betrag"]]
+    t_bel_data = [[
+        Paragraph("Datum", th_left),
+        Paragraph("Händler / Verwendungszweck", th_left),
+        Paragraph("Belegnachweis", th_left),
+        Paragraph("Betrag", th_right)
+    ]]
     idx = 1
     for b in belege:
         nachweis = f"Anhang #{idx}" if b.get("datei") else "Eigenbeleg/Kein Anhang"
-        t_bel_data.append([b.get("datum", ""), b.get("zweck", ""), nachweis, f"{b.get('betrag', 0.0):.2f} €"])
+        t_bel_data.append([
+            Paragraph(b.get("datum", ""), c_val),
+            Paragraph(b.get("zweck", ""), c_val),
+            Paragraph(nachweis, c_val),
+            Paragraph(f"{b.get('betrag', 0.0):.2f} €", td_right)
+        ])
         idx += 1
 
     gesamt_auslagen = summen["auslagen"]
     if not belege:
-        t_bel_data.append(["–", "Keine Materialauslagen geltend gemacht", "–", "0.00 €"])
-    t_bel_data.append(["Gesamtsumme Auslagen:", "", "", f"{gesamt_auslagen:.2f} €"])
+        t_bel_data.append([
+            Paragraph("–", c_val),
+            Paragraph("Keine Materialauslagen geltend gemacht", c_val),
+            Paragraph("–", c_val),
+            Paragraph("0.00 €", td_right)
+        ])
+    t_bel_data.append([
+        Paragraph("<b>Gesamtsumme Auslagen:</b>", c_val_bold),
+        "",
+        "",
+        Paragraph(f"<b>{gesamt_auslagen:.2f} €</b>", td_right)
+    ])
 
-    t_bel = Table(t_bel_data, colWidths=[80, 250, 100, 90])
+    t_bel = Table(t_bel_data, colWidths=[75, 250, 98, 100])
     t_bel.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
         ('GRID', (0, 0), (-1, -1), 0.5, FARBE_BORDER),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('ALIGN', (3, 0), (3, -1), 'RIGHT'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('SPAN', (0, -1), (2, -1)),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
     ]))
     elements.append(t_bel)
-    elements.append(Spacer(1, 18))
+    elements.append(Spacer(1, 14))
 
-    # 3. Summe
+    # 3. Summe & Buchungs-Referenz für Überweisung (Gesamtbreite: 523pt)
     gesamt = summen["gesamt"]
-    t_sum = Table([["Zur Auszahlung fälliger Gesamtbetrag:", f"{gesamt:.2f} €"]], colWidths=[370, 150])
+    t_sum = Table([["Zur Auszahlung fälliger Gesamtbetrag:", f"{gesamt:.2f} €"]], colWidths=[370, 153])
     t_sum.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#dcfce7")),
         ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('FONTSIZE', (0, 0), (-1, -1), 10.5),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor("#14532d")),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
         ('BOX', (0, 0), (-1, -1), 1, colors.HexColor("#16a34a")),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
     ]))
     elements.append(t_sum)
-    elements.append(Spacer(1, 28))
+    elements.append(Spacer(1, 4))
 
-    # 4. Unterschriften
+    # Kasten: Verwendungszweck für Kassenwart-App & Bankauszug
+    ref_string = f"{kid_text} {stamm.get('leiter', '').strip()}"
+    t_ref = Table([
+        ["Empfohlener Verwendungszweck für Überweisung:", Paragraph(f"<b><font size='9' color='#1e3d59'>{ref_string}</font></b>", styles['Normal'])]
+    ], colWidths=[230, 293])
+    t_ref.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(t_ref)
+    elements.append(Spacer(1, 16))
+
+    # 4. Unterschriften (Kursleiter & Vorstand)
     t_sig = Table([
         ["________________________________________", "________________________________________"],
-        ["Datum, Unterschrift Kursleiter", "Datum, Sachlich richtig / Vorstand Förderverein"]
-    ], colWidths=[260, 260])
+        ["Datum, Unterschrift Kursleiter", "Datum, Sachlich & rechnerisch richtig (Vorstand)"]
+    ], colWidths=[256, 267])
     t_sig.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTSIZE', (0, 1), (-1, 1), 8.5),
+        ('FONTSIZE', (0, 1), (-1, 1), 8),
         ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor("#334155")),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
     ]))
     elements.append(t_sig)
+    elements.append(Spacer(1, 12))
+
+    # 5. Kassenwart-Auszahlungsfeld mit INTERAKTIVEN AcroForm-Feldern
+    kw_box_data = [
+        [
+            Paragraph("<b>🏦 Zahlungsanweisung & Ausführungsvermerk des Kassenwarts</b> (digital ausfüllbar)", c_val_bold),
+            ""
+        ],
+        [
+            Table([
+                [Paragraph("Angewiesener Betrag:", c_val),
+                 InteractiveTextField("kassenwart_betrag", width=75, height=14, tooltip="Überweisener Betrag in €"),
+                 Paragraph("€", c_val)]
+            ], colWidths=[105, 80, 15]),
+            Table([
+                [Paragraph("Überwiesen am:", c_val),
+                 InteractiveTextField("kassenwart_datum", width=85, height=14, tooltip="Überweisungsdatum (TT.MM.JJJJ)")]
+            ], colWidths=[75, 90])
+        ],
+        [
+            Paragraph("<font color='#64748b' size='7'><i>(Betrag kann bei Abschlägen / Korrekturen vom PDF-Gesamtbetrag abweichen)</i></font>", styles['Normal']),
+            Table([
+                [Paragraph("Kassenwart / Visum:", c_label),
+                 InteractiveTextField("kassenwart_signatur", width=120, height=14, tooltip="Datum, Unterschrift oder Namenskürzel des Kassenwarts")]
+            ], colWidths=[90, 125])
+        ]
+    ]
+    t_kw = Table(kw_box_data, colWidths=[265, 258])
+    t_kw.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+        ('BOX', (0, 0), (-1, -1), 0.75, colors.HexColor("#94a3b8")),
+        ('SPAN', (0, 0), (1, 0)),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor("#cbd5e1")),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(t_kw)
 
     doc.build(elements)
 
-    # Belege anhängen via PyPDF
+    # Deckblatt anhängen & AcroForms vollständig erhalten
     writer = PdfWriter()
     reader_deckblatt = PdfReader(deckblatt_temp)
-    for p in reader_deckblatt.pages:
-        writer.add_page(p)
+    writer.append(reader_deckblatt)
+
+    # AcroForm-Formularfelder für alle gängigen PDF-Viewer aktivieren
+    try:
+        from pypdf.generic import NameObject, BooleanObject
+        if hasattr(writer, "_root_object") and "/AcroForm" in writer._root_object:
+            writer._root_object["/AcroForm"].update({
+                NameObject("/NeedAppearances"): BooleanObject(True)
+            })
+    except Exception:
+        pass
 
     beleg_idx = 1
     for b in belege:
@@ -472,8 +854,7 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
         if ext == ".pdf":
             try:
                 r_bel = PdfReader(d)
-                for p in r_bel.pages:
-                    writer.add_page(p)
+                writer.append(r_bel)
             except Exception:
                 pass
         elif ext in [".jpg", ".jpeg", ".png"]:
@@ -492,12 +873,54 @@ def erzeuge_abrechnung_pdf(stamm: Dict[str, str], kurs: Dict[str, Any], belege: 
             img_doc.build(img_elems)
 
             r_img = PdfReader(temp_img_pdf)
-            for p in r_img.pages:
-                writer.add_page(p)
+            writer.append(r_img)
             if os.path.exists(temp_img_pdf):
                 os.remove(temp_img_pdf)
 
         beleg_idx += 1
+
+    # Standard-Metadaten für Kassenwart-App
+    writer.add_metadata({
+        "/Title": f"Abrechnung {kurs.get('id', '')} - {kurs.get('titel', '')}",
+        "/Author": stamm.get("leiter", ""),
+        "/Subject": f"Förderverein Abrechnung Kurs-ID: {kurs.get('id', '')}",
+        "/Keywords": f"KursID={kurs.get('id', '')};Betrag={gesamt:.2f};IBAN={stamm.get('iban', '')};Datum={kurs.get('datum', '')}",
+        "/Creator": f"{__app_name__} v{__version__}"
+    })
+
+    # Maschinenlesbares JSON-Attachment für Kassenwart-App & Re-Import
+    meta_payload = {
+        "schema_version": "1.0",
+        "app_version": __version__,
+        "erstellt_am": datetime.now().isoformat(),
+        "stammdaten": {
+            "leiter": stamm.get("leiter", ""),
+            "iban": stamm.get("iban", ""),
+            "satz": stamm.get("satz", "0")
+        },
+        "kurs": {
+            "id": kurs.get("id", ""),
+            "titel": kurs.get("titel", ""),
+            "ag": kurs.get("ag", ""),
+            "datum": kurs.get("datum", ""),
+            "dauer": kurs.get("dauer", "0")
+        },
+        "summen": summen,
+        "belege": [
+            {
+                "datum": b.get("datum", ""),
+                "zweck": b.get("zweck", ""),
+                "betrag": b.get("betrag", 0.0),
+                "hat_datei": bool(b.get("datei"))
+            }
+            for b in belege
+        ]
+    }
+    try:
+        json_bytes = json.dumps(meta_payload, ensure_ascii=False, indent=2).encode("utf-8")
+        writer.add_attachment("abrechnungsdaten.json", json_bytes)
+    except Exception:
+        pass
 
     with open(zielpfad, "wb") as f_out:
         writer.write(f_out)

@@ -27,6 +27,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
         self.stamm = core.lade_stammdaten()
         entwurf = core.lade_entwurf()
         self.kurs = {
+            "id": entwurf.get("id", ""),
             "titel": entwurf.get("titel", ""),
             "ag": entwurf.get("ag", ""),
             "datum": entwurf.get("datum", ""),
@@ -61,9 +62,24 @@ class WindowsAbrechnungsApp(ctk.CTk):
             text_color=("#1e3d59", "#64b5f6")
         ).pack(anchor="w", padx=10, pady=(8, 4))
 
-        self.entry_leiter = self._create_entry(stamm_card, "Name des Kursleiters", self.stamm.get("leiter", ""))
-        self.entry_iban = self._create_entry(stamm_card, "IBAN", self.stamm.get("iban", ""))
-        self.entry_satz = self._create_entry(stamm_card, "Stundensatz (€/h, z. B. 20.00)", self.stamm.get("satz", "20.00"))
+        self.entry_leiter = self._create_labeled_entry(
+            stamm_card,
+            "Name des Kursleiters / Auftragnehmers:",
+            "z. B. Maria Musterfrau",
+            self.stamm.get("leiter", "")
+        )
+        self.entry_iban = self._create_labeled_entry(
+            stamm_card,
+            "IBAN (deutsches Girokonto, 22 Stellen):",
+            "DE89 3704 0044 0532 0130 00",
+            self.stamm.get("iban", "")
+        )
+        self.entry_satz = self._create_labeled_entry(
+            stamm_card,
+            "Vereinbarter Stundensatz (€/h):",
+            "z. B. 20.00",
+            self.stamm.get("satz", "20.00")
+        )
 
         # 2. Kursdaten (dieser Vorgang)
         kurs_card = ctk.CTkFrame(self.left_frame, fg_color=("gray92", "gray17"), corner_radius=10)
@@ -76,13 +92,62 @@ class WindowsAbrechnungsApp(ctk.CTk):
             text_color=("#d97706", "#fbbf24")
         ).pack(anchor="w", padx=10, pady=(8, 4))
 
-        self.entry_kurs_titel = self._create_entry(kurs_card, "Titel des Kurses (z. B. Robotik-AG)", self.kurs.get("titel", ""))
-        self.entry_ag = self._create_entry(kurs_card, "Gruppe / Klasse (z. B. Klasse 3-4)", self.kurs.get("ag", ""))
-        self.entry_kurs_datum = self._create_entry(kurs_card, "Datum des Kurses (TT.MM.JJJJ)", self.kurs.get("datum", ""))
-        self.entry_kurs_dauer = self._create_entry(kurs_card, "Dauer in Stunden (z. B. 2.0)", self.kurs.get("dauer", "2.0"))
+        # Kurs-ID mit Auto-Vorschlag
+        id_header = ctk.CTkFrame(kurs_card, fg_color="transparent")
+        id_header.pack(fill="x", padx=10, pady=(6, 1))
+
+        ctk.CTkLabel(
+            id_header,
+            text="Kurs-ID / Buchungs-Referenz:",
+            font=("Arial", 11, "bold"),
+            text_color=("#334155", "#cbd5e1")
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            id_header,
+            text="⚡ Neu vorschlagen",
+            width=110,
+            height=20,
+            font=("Arial", 10),
+            fg_color=("#d97706", "#b45309"),
+            hover_color="#92400e",
+            text_color="white",
+            command=self.kurs_id_vorschlag_generieren
+        ).pack(side="right")
+
+        self.entry_kurs_id = ctk.CTkEntry(kurs_card, placeholder_text="z. B. SJ2627-SCHACH-01")
+        if self.kurs.get("id"):
+            self.entry_kurs_id.insert(0, str(self.kurs.get("id")))
+        self.entry_kurs_id.pack(fill="x", padx=10, pady=(0, 4))
+
+        self.entry_kurs_titel = self._create_labeled_entry(
+            kurs_card,
+            "Titel des Kurses / AG:",
+            "z. B. Robotik-AG oder Schach",
+            self.kurs.get("titel", "")
+        )
+        self.entry_ag = self._create_labeled_entry(
+            kurs_card,
+            "Gruppe / Schulklasse:",
+            "z. B. Klasse 3-4",
+            self.kurs.get("ag", "")
+        )
+        self.entry_kurs_datum = self._create_labeled_entry(
+            kurs_card,
+            "Datum des Kurstermins (TT.MM.JJJJ):",
+            "z. B. 23.10.2026",
+            self.kurs.get("datum", "")
+        )
+        self.entry_kurs_dauer = self._create_labeled_entry(
+            kurs_card,
+            "Dauer in Stunden (z. B. 2.0 für 120 Min):",
+            "2.0",
+            self.kurs.get("dauer", "2.0")
+        )
 
         for e in [self.entry_leiter, self.entry_iban, self.entry_satz,
-                  self.entry_kurs_titel, self.entry_ag, self.entry_kurs_datum, self.entry_kurs_dauer]:
+                  self.entry_kurs_id, self.entry_kurs_titel, self.entry_ag,
+                  self.entry_kurs_datum, self.entry_kurs_dauer]:
             e.bind("<KeyRelease>", lambda event: self._on_input_changed())
 
         # 3. Materialauslagen & Belege
@@ -96,9 +161,29 @@ class WindowsAbrechnungsApp(ctk.CTk):
             text_color=("#0f766e", "#2dd4bf")
         ).pack(anchor="w", padx=10, pady=(8, 4))
 
-        self.entry_bel_datum = self._create_entry(beleg_card, "Kaufdatum (TT.MM.JJJJ)")
-        self.entry_bel_haendler = self._create_entry(beleg_card, "Händler / Verwendungszweck (z. B. Bastelbedarf Müller)")
-        self.entry_bel_betrag = self._create_entry(beleg_card, "Betrag in € (z. B. 24.95)")
+        self.entry_bel_datum = self._create_labeled_entry(
+            beleg_card,
+            "Kaufdatum des Belegs (TT.MM.JJJJ):",
+            "z. B. 15.10.2026"
+        )
+        self.entry_bel_haendler = self._create_labeled_entry(
+            beleg_card,
+            "Händler / Verwendungszweck:",
+            "z. B. Bastelbedarf Müller"
+        )
+        self.entry_bel_betrag = self._create_labeled_entry(
+            beleg_card,
+            "Rechnungsbetrag in €:",
+            "z. B. 24.95"
+        )
+
+        ctk.CTkLabel(
+            beleg_card,
+            text="Beleg-Nachweis (Foto oder PDF):",
+            font=("Arial", 11, "bold"),
+            text_color=("#334155", "#94a3b8"),
+            anchor="w"
+        ).pack(anchor="w", padx=10, pady=(6, 2))
 
         self.btn_file = ctk.CTkButton(
             beleg_card,
@@ -108,7 +193,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
             text_color=("black", "white"),
             command=self.datei_auswaehlen
         )
-        self.btn_file.pack(fill="x", padx=10, pady=5)
+        self.btn_file.pack(fill="x", padx=10, pady=(2, 6))
 
         ctk.CTkButton(
             beleg_card,
@@ -118,7 +203,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
             text_color="white",
             font=("Arial", 12, "bold"),
             command=self.beleg_hinzufuegen
-        ).pack(fill="x", padx=10, pady=(5, 8))
+        ).pack(fill="x", padx=10, pady=(4, 8))
 
         ctk.CTkLabel(self.left_frame, text="Angehängte Belegposten:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 2))
         self.belege_container = ctk.CTkFrame(self.left_frame, fg_color="transparent")
@@ -140,15 +225,30 @@ class WindowsAbrechnungsApp(ctk.CTk):
             text_color=("#1e3d59", "#90caf9")
         ).pack(side="left")
 
+        header_btn_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        header_btn_frame.pack(side="right")
+
         ctk.CTkButton(
-            header_frame,
-            text="🔄 Neuen Kurs abrechnen",
+            header_btn_frame,
+            text="📂 PDF laden",
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            text_color="white",
+            width=85,
+            font=("Arial", 11, "bold"),
+            command=self.pdf_oeffnen_und_laden
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            header_btn_frame,
+            text="🔄 Neu",
             fg_color=("#d97706", "#b45309"),
             hover_color="#92400e",
             text_color="white",
+            width=60,
             font=("Arial", 11, "bold"),
             command=self.neuen_kurs_starten
-        ).pack(side="right")
+        ).pack(side="left")
 
         self.summary_box = ctk.CTkTextbox(self.right_frame, font=("Consolas", 12))
         self.summary_box.pack(fill="both", expand=True, padx=10, pady=8)
@@ -178,18 +278,97 @@ class WindowsAbrechnungsApp(ctk.CTk):
         )
         self.btn_open_folder.pack(fill="x", pady=2)
 
-    def _create_entry(self, parent, placeholder, initial=""):
+    def _create_labeled_entry(self, parent, label_text: str, placeholder: str = "", initial: str = ""):
+        """Erzeugt ein festes, dauerhaft sichtbares Label und direkt darunter das Eingabefeld."""
+        lbl = ctk.CTkLabel(
+            parent,
+            text=label_text,
+            font=("Arial", 11, "bold"),
+            text_color=("#334155", "#cbd5e1"),
+            anchor="w"
+        )
+        lbl.pack(anchor="w", padx=10, pady=(6, 1))
+
         e = ctk.CTkEntry(parent, placeholder_text=placeholder)
         if initial:
             e.insert(0, str(initial))
-        e.pack(fill="x", padx=10, pady=4)
+        e.pack(fill="x", padx=10, pady=(0, 4))
         return e
+
+    def kurs_id_vorschlag_generieren(self):
+        titel = self.entry_kurs_titel.get().strip()
+        datum = self.entry_kurs_datum.get().strip()
+        vorschlag = core.generiere_kurs_id_vorschlag(titel, datum)
+        self.entry_kurs_id.delete(0, "end")
+        self.entry_kurs_id.insert(0, vorschlag)
+        self._on_input_changed()
+
+    def pdf_oeffnen_und_laden(self):
+        """Öffnet eine bestehende PDF-Abrechnung und stellt alle Daten zur Weiterbearbeitung her."""
+        pfad = filedialog.askopenfilename(
+            title="Bestehende Abrechnung öffnen",
+            initialdir=core.EXPORT_DIR,
+            filetypes=[("PDF-Abrechnungsdokument", "*.pdf")]
+        )
+        if not pfad:
+            return
+
+        erfolg, daten, err = core.lese_abrechnung_aus_pdf(pfad)
+        if not erfolg or not daten:
+            messagebox.showwarning("Fehler beim Öffnen", err or "Unbekannter Fehler beim Einlesen der PDF.")
+            return
+
+        # Stammdaten befüllen
+        stamm_neu = daten.get("stammdaten", {})
+        if stamm_neu:
+            self.stamm.update(stamm_neu)
+            self.entry_leiter.delete(0, "end")
+            self.entry_leiter.insert(0, self.stamm.get("leiter", ""))
+            self.entry_iban.delete(0, "end")
+            self.entry_iban.insert(0, self.stamm.get("iban", ""))
+            self.entry_satz.delete(0, "end")
+            self.entry_satz.insert(0, self.stamm.get("satz", "20.00"))
+
+        # Kursdaten befüllen
+        kurs_neu = daten.get("kurs", {})
+        if kurs_neu:
+            self.kurs.update(kurs_neu)
+            self.entry_kurs_id.delete(0, "end")
+            self.entry_kurs_id.insert(0, self.kurs.get("id", ""))
+            self.entry_kurs_titel.delete(0, "end")
+            self.entry_kurs_titel.insert(0, self.kurs.get("titel", ""))
+            self.entry_ag.delete(0, "end")
+            self.entry_ag.insert(0, self.kurs.get("ag", ""))
+            self.entry_kurs_datum.delete(0, "end")
+            self.entry_kurs_datum.insert(0, self.kurs.get("datum", ""))
+            self.entry_kurs_dauer.delete(0, "end")
+            self.entry_kurs_dauer.insert(0, str(self.kurs.get("dauer", "2.0")))
+
+        # Belege befüllen
+        self.belege_liste = daten.get("belege", [])
+
+        core.speichere_stammdaten(self.stamm)
+        core.speichere_entwurf(self.kurs, self.belege_liste)
+
+        self._belege_karten_rendern()
+        self.liste_aktualisieren()
+
+        kid = self.kurs.get("id") or "Unbekannt"
+        messagebox.showinfo("Abrechnung geladen", f"Die Abrechnung '{kid}' wurde erfolgreich geladen!\n\nAlle Felder können nun direkt digital bearbeitet werden.")
 
     def _on_input_changed(self):
         self.stamm["leiter"] = self.entry_leiter.get()
         self.stamm["iban"] = self.entry_iban.get()
         self.stamm["satz"] = self.entry_satz.get()
 
+        # Automatischer Vorschlag für Kurs-ID, falls Titel getippt wird und ID noch leer ist
+        aktuelle_id = self.entry_kurs_id.get().strip()
+        titel = self.entry_kurs_titel.get().strip()
+        if not aktuelle_id and len(titel) >= 3:
+            vorschlag = core.generiere_kurs_id_vorschlag(titel, self.entry_kurs_datum.get().strip())
+            self.entry_kurs_id.insert(0, vorschlag)
+
+        self.kurs["id"] = self.entry_kurs_id.get().strip()
         self.kurs["titel"] = self.entry_kurs_titel.get()
         self.kurs["ag"] = self.entry_ag.get()
         self.kurs["datum"] = self.entry_kurs_datum.get()
@@ -335,9 +514,11 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self.belege_liste
         )
 
+        kurs_id = self.entry_kurs_id.get().strip() or "– Noch keine Kurs-ID –"
         kurs_titel = self.entry_kurs_titel.get().strip() or "– Kein Kurstitel –"
         gruppe = self.entry_ag.get().strip() or "– Keine Gruppe –"
         kurs_datum_str = self.entry_kurs_datum.get().strip() or "– Kein Datum –"
+        leiter_name = self.entry_leiter.get().strip() or "Kursleiter"
 
         periode_text = "–"
         parsed_kd, _ = core.parse_datum(kurs_datum_str, "Kursdatum")
@@ -345,12 +526,31 @@ class WindowsAbrechnungsApp(ctk.CTk):
             _, _, p_name = core.ferien_mgr.ermittle_abrechnungszeitraum(parsed_kd)
             periode_text = p_name
 
+        iban_str = self.entry_iban.get().strip()
+        if iban_str:
+            iban_ok, _ = core.validiere_iban(iban_str)
+            iban_status = f"{core.formatiere_iban(iban_str)} (Gültig ✓)" if iban_ok else f"{iban_str} (Prüfung ausstehend / Ungültig ⚠)"
+        else:
+            iban_status = "– Nicht angegeben –"
+
+        # Fester Dateiname als Vorschau
+        fester_name = core.generiere_standard_dateinamen(
+            kurs_datum_str,
+            kurs_titel,
+            leiter_name,
+            kurs_id
+        )
+
         text = (
             f"═══════════════════════════════════════════════════════\n"
-            f" KURS: {kurs_titel}\n"
+            f" KURS-ID:      {kurs_id}\n"
+            f" KURS:         {kurs_titel}\n"
             f" Gruppe/Klasse: {gruppe}\n"
-            f" Termin: {kurs_datum_str}\n"
-            f" Abrechnungsperiode (BW): {periode_text}\n"
+            f" Termin:       {kurs_datum_str}\n"
+            f" Periode (BW): {periode_text}\n"
+            f" IBAN:         {iban_status}\n"
+            f" ──> Überweisungs-Ref: {kurs_id} {leiter_name}\n"
+            f" ──> Fester Dateiname: {fester_name}\n"
             f"═══════════════════════════════════════════════════════\n\n"
             f"1. AUFWANDSENTSCHÄDIGUNG (STUNDEN)\n"
             f" • Dauer: {summen['dauer']:.2f} Stunden\n"
@@ -377,6 +577,7 @@ class WindowsAbrechnungsApp(ctk.CTk):
             "• Deine Personendaten (Name, IBAN, Stundensatz) bleiben erhalten."
         )
         if messagebox.askyesno("Neuen Kurs starten", msg):
+            self.entry_kurs_id.delete(0, "end")
             self.entry_kurs_titel.delete(0, "end")
             self.entry_ag.delete(0, "end")
             self.entry_kurs_datum.delete(0, "end")
@@ -389,20 +590,56 @@ class WindowsAbrechnungsApp(ctk.CTk):
             self._on_input_changed()
 
     def pdf_erstellen(self):
+        # 1. Kursleiter prüfen
         if not self.entry_leiter.get().strip():
             messagebox.showwarning("Plausibilitätsprüfung", "Bitte den Namen des Kursleiters angeben.")
             return
 
+        # 2. IBAN Modulo-97 validieren
+        iban_val = self.entry_iban.get().strip()
+        iban_ok, iban_err = core.validiere_iban(iban_val)
+        if not iban_ok:
+            messagebox.showwarning("IBAN-Prüfung", f"Die angegebene IBAN ist ungültig:\n{iban_err}")
+            return
+
+        # 3. Kurs-ID validieren (Option 1)
+        kurs_id_val = self.entry_kurs_id.get().strip()
+        id_ok, id_err = core.validiere_kurs_id(kurs_id_val)
+        if not id_ok:
+            messagebox.showwarning("Kurs-ID Prüfung", id_err)
+            return
+
+        # 4. Kurstitel prüfen
         if not self.entry_kurs_titel.get().strip():
             messagebox.showwarning("Plausibilitätsprüfung", "Bitte den Kurstitel angeben.")
             return
 
+        # 5. Kursdatum prüfen
         kurs_datum_str = self.entry_kurs_datum.get().strip()
         kd_parsed, err = core.parse_datum(kurs_datum_str, "Kursdatum")
         if err:
             messagebox.showwarning("Plausibilitätsprüfung", err)
             return
 
+        # 6. Kursdauer prüfen (1–480 Min)
+        dauer_ok, _, dauer_err = core.validiere_kurs_dauer(self.entry_kurs_dauer.get())
+        if not dauer_ok:
+            messagebox.showwarning("Plausibilitätsprüfung (Kursdauer)", dauer_err)
+            return
+
+        # 7. Wochenend-Warnung
+        wochenend_tag = core.pruefe_wochenende(kd_parsed)
+        if wochenend_tag:
+            msg = (
+                f"Hinweis zum Wochentag:\n"
+                f"Der Kurstag ({kd_parsed.strftime('%d.%m.%Y')}) fällt auf einen {wochenend_tag}.\n\n"
+                f"Handelt es sich um eine Sonderveranstaltung am Wochenende?\n"
+                f"Möchtest du trotzdem fortfahren?"
+            )
+            if not messagebox.askyesno("Wochenend-Termin", msg):
+                return
+
+        # 8. Ferien-Warnung
         ferien_name = core.ferien_mgr.pruefe_in_ferien(kd_parsed)
         if ferien_name:
             msg = (
@@ -414,30 +651,35 @@ class WindowsAbrechnungsApp(ctk.CTk):
             if not messagebox.askyesno("Kurstag in den Ferien", msg):
                 return
 
-        vorschlag_name = core.generiere_standard_dateinamen(
+        # Fester Dateiname für automatisiertes Einlesen durch Kassenwart-App
+        fester_dateiname = core.generiere_standard_dateinamen(
             kurs_datum_str,
             self.entry_kurs_titel.get(),
-            self.entry_leiter.get()
+            self.entry_leiter.get(),
+            kurs_id_val
         )
+        zielpfad = os.path.join(core.EXPORT_DIR, fester_dateiname)
 
-        zielpfad = filedialog.asksaveasfilename(
-            initialdir=core.EXPORT_DIR,
-            initialfile=vorschlag_name,
-            defaultextension=".pdf",
-            filetypes=[("PDF-Dokument", "*.pdf")],
-            title="Abrechnung als PDF speichern"
-        )
-        if not zielpfad:
-            return
+        # Prüfung auf Überschreiben
+        if os.path.exists(zielpfad):
+            confirm = messagebox.askyesno(
+                "Datei existiert bereits",
+                f"Die Abrechnung mit dem festen Kassenwart-Dateinamen existiert bereits:\n\n"
+                f"'{fester_dateiname}'\n\n"
+                f"Möchtest du die Datei überschreiben?"
+            )
+            if not confirm:
+                return
 
         try:
             core.erzeuge_abrechnung_pdf(self.stamm, self.kurs, self.belege_liste, zielpfad)
             self._on_input_changed()
 
             msg = (
-                f"Die PDF wurde erfolgreich gespeichert unter:\n\n"
-                f"{zielpfad}\n\n"
-                f"Möchtest du den Ordner im Explorer öffnen?"
+                f"Die PDF wurde erfolgreich mit festem Kassenwart-Schema gespeichert:\n\n"
+                f"📄 {fester_dateiname}\n\n"
+                f"Speicherort:\n{zielpfad}\n\n"
+                f"Möchtest du den Export-Ordner im Explorer öffnen?"
             )
             if messagebox.askyesno("PDF erfolgreich erstellt", msg):
                 self.open_export_dir()
