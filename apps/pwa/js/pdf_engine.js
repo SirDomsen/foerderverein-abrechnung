@@ -82,7 +82,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   const contentWidth = rightX - leftX;
 
   // --- KOPFZEILE ---
-  drawSafe("FÖRDERVEREIN DER GRUNDSCHULE E.V.", {
+  drawSafe("Förderverein der Riedlen-Grundschule e.V.", {
     x: leftX,
     y: y - 14,
     size: 15,
@@ -516,7 +516,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     sanitizeForPdf(`IBAN=${stamm.iban || ''}`),
     sanitizeForPdf(`Modus=${modus}`)
   ]);
-  pdfDoc.setCreator("Förderverein Grundschule – Abrechnungs-Manager v1.1.0 (PWA)");
+  pdfDoc.setCreator("Förderverein der Riedlen-Grundschule e.V. – Abrechnungs-Manager v1.2.0 (PWA)");
 
   // Maschinenlesbares JSON-Attachment einbetten
   const metaPayload = {
