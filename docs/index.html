@@ -292,16 +292,26 @@
       <h3 class="text-lg font-bold text-slate-900">Abrechnung erfolgreich erstellt!</h3>
       <p id="lblModalDateiname" class="text-xs font-mono bg-slate-100 p-2 rounded text-slate-700 break-all"></p>
 
-      <div class="space-y-2 pt-2">
-        <!-- Sendebutton: Smartphone Teilen oder Mailto -->
-        <button id="btnModalShare" class="w-full bg-[#1e3d59] hover:bg-[#162e43] text-white font-bold py-3 px-4 rounded-xl shadow transition flex justify-center items-center gap-2 text-sm">
-          <span>📤</span> Abrechnung per E-Mail einreichen
-        </button>
+      <div class="space-y-3 pt-2">
+        <!-- Hinweis zum Versand -->
+        <div class="p-3 bg-amber-50 border border-amber-200 rounded-xl text-left text-xs text-amber-900 space-y-1">
+          <p class="font-bold flex items-center gap-1 text-amber-950">
+            <span>💡</span> Wichtiger Hinweis zum E-Mail-Versand:
+          </p>
+          <p class="text-[11px] leading-relaxed text-amber-800">
+            Aus Sicherheitsgründen von Browsern und Betriebssystemen kann die PDF-Datei nicht automatisch an die E-Mail gehängt werden. Bitte speichere zuerst die PDF (<strong>Schritt 1</strong>) und füge sie anschließend als Anhang in die vorbereitete E-Mail ein (<strong>Schritt 2</strong>).
+          </p>
+        </div>
 
-        <!-- Manueller Download -->
-        <a id="btnModalDownload" class="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-semibold py-2.5 px-4 rounded-xl transition flex justify-center items-center gap-2 text-xs">
-          <span>📥</span> PDF auf Gerät speichern
+        <!-- Schritt 1: Download -->
+        <a id="btnModalDownload" class="w-full bg-[#1e3d59] hover:bg-[#162e43] text-white font-bold py-3 px-4 rounded-xl shadow transition flex justify-center items-center gap-2 text-sm">
+          <span>📥</span> Schritt 1: PDF auf Gerät speichern
         </a>
+
+        <!-- Schritt 2: Mail vorbereiten -->
+        <button id="btnModalShare" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-xl shadow transition flex justify-center items-center gap-2 text-sm">
+          <span>✉️</span> Schritt 2: E-Mail an Förderverein vorbereiten
+        </button>
 
         <button onclick="schliesseErfolgsModal()" class="w-full text-slate-500 hover:text-slate-700 py-1.5 text-xs font-medium">
           Schließen
