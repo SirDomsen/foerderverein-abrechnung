@@ -4,6 +4,14 @@
     "defaultColor": "#ffffff",
     "commands": [
       {
+        "name": "$(globe) Offline-App (PWA)",
+        "color": "#10b981",
+        "tooltip": "Öffnet die universelle Offline-Webapp (ohne Server)",
+        "singleInstance": true,
+        "focus": true,
+        "command": "cmd /c start apps\\pwa\\index.html"
+      },
+      {
         "name": "$(gear) Build EXE",
         "color": "#4caf50",
         "tooltip": "Baut die AbrechnungsManager.exe mit PyInstaller",
@@ -12,7 +20,7 @@
         "command": "python -m PyInstaller --noconsole --onefile --name AbrechnungsManager --collect-all customtkinter app_windows.py"
       },
       {
-        "name": "$(browser) Start Web-App",
+        "name": "$(browser) Start Python Web-App",
         "color": "#38bdf8",
         "tooltip": "Startet den NiceGUI Webserver (Web & Smartphone)",
         "singleInstance": true,
