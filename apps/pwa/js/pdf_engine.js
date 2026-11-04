@@ -31,6 +31,26 @@ function sanitizeForPdf(str) {
   }).join('');
 }
 
+// Bricht Text zeilenweise sauber an Wortgrenzen um, damit nichts aus Kästen herausragt
+function wrapTextToWidth(text, maxWidth, font, size) {
+  if (!text) return [];
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+  for (const word of words) {
+    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    const testWidth = font.widthOfTextAtSize(sanitizeForPdf(testLine), size);
+    if (testWidth <= maxWidth) {
+      currentLine = testLine;
+    } else {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
+
 async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgung = null) {
   const { PDFDocument, rgb, StandardFonts } = PDFLib;
 
@@ -56,7 +76,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   const cDark = rgb(0.059, 0.090, 0.165); // #0f172a
   const cGray = rgb(0.278, 0.333, 0.412); // #475569
 
-  let y = height - 36;
+  let y = height - 34;
   const leftX = 36;
   const rightX = width - 36;
   const contentWidth = rightX - leftX;
@@ -65,28 +85,28 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   drawSafe("FÖRDERVEREIN DER GRUNDSCHULE E.V.", {
     x: leftX,
     y: y - 14,
-    size: 14,
+    size: 15,
     font: fontBold,
     color: cPrim,
   });
 
   const heuteStr = formatDateGerman(new Date());
   drawSafe(`Datum: ${heuteStr}`, {
-    x: rightX - 120,
+    x: rightX - 110,
     y: y - 10,
     size: 8.5,
     font: fontBold,
     color: cDark,
   });
-  drawSafe("v1.0.0 (Web/Mobile)", {
-    x: rightX - 120,
+  drawSafe("v1.1.0 (Web/Mobile)", {
+    x: rightX - 110,
     y: y - 22,
     size: 7,
     font: fontRegular,
     color: rgb(0.58, 0.64, 0.72),
   });
 
-  y -= 30;
+  y -= 28;
   const subTitel = (modus === "besorgung")
     ? "Auslagenerstattung für Fördervereins-Veranstaltungen & Sachbedarf"
     : "Abrechnung über Aufwandsentschädigung & Materialauslagen für Schul-AGs";
@@ -94,7 +114,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   drawSafe(subTitel, {
     x: leftX,
     y: y,
-    size: 9,
+    size: 9.5,
     font: fontItalic,
     color: cGray,
   });
@@ -108,15 +128,15 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   });
 
   // --- STAMMDATEN-KASTEN ---
-  y -= 14;
+  y -= 12;
   let stammFields = [];
-  let kastenHeight = 94;
+  let kastenHeight = 96;
 
   if (modus === "besorgung") {
     const b = besorgung || {};
     const bDatumParsed = parseGermanDate(b.datum) || new Date();
     const bSj = ermittleSchuljahrDetails(bDatumParsed);
-    kastenHeight = 80;
+    kastenHeight = 84;
 
     stammFields = [
       { label1: "Antragsteller / Person:", val1: stamm.leiter || "–", label2: "Beleg-ID / Referenz:", val2: b.id || "–", bold: true },
@@ -155,7 +175,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     color: cBgHell,
   });
 
-  let rowY = boxTop - 14;
+  let rowY = boxTop - 15;
   for (const row of stammFields) {
     drawSafe(row.label1, { x: leftX + 8, y: rowY, size: 7.5, font: fontBold, color: cGray });
     drawSafe(String(row.val1).slice(0, 32), { x: leftX + 110, y: rowY, size: 8, font: row.bold ? fontBold : fontRegular, color: cDark });
@@ -165,7 +185,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     rowY -= 16;
   }
 
-  y = boxTop - kastenHeight - 16;
+  y = boxTop - kastenHeight - 14;
 
   // Summen berechnen
   const summen = (modus === "besorgung")
@@ -189,38 +209,38 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     drawSafe("1. Erbrachte Kursleistung", { x: leftX, y, size: 10, font: fontBold, color: cPrim });
     y -= 6;
 
-    page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(0.886, 0.910, 0.941), borderColor: cBorder, borderWidth: 0.5 });
-    drawSafe("Datum", { x: leftX + 6, y: y - 11, size: 8, font: fontBold, color: cDark });
-    drawSafe("Kursbezeichnung / Inhalt", { x: leftX + 85, y: y - 11, size: 8, font: fontBold, color: cDark });
-    drawSafe("Dauer", { x: leftX + 355, y: y - 11, size: 8, font: fontBold, color: cDark });
-    drawSafe("Honoraranspruch", { x: rightX - 85, y: y - 11, size: 8, font: fontBold, color: cDark });
+    page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: rgb(0.886, 0.910, 0.941), borderColor: cBorder, borderWidth: 0.5 });
+    drawSafe("Datum", { x: leftX + 6, y: y - 12, size: 8, font: fontBold, color: cDark });
+    drawSafe("Kursbezeichnung / Inhalt", { x: leftX + 85, y: y - 12, size: 8, font: fontBold, color: cDark });
+    drawSafe("Dauer", { x: leftX + 355, y: y - 12, size: 8, font: fontBold, color: cDark });
+    drawSafe("Honoraranspruch", { x: rightX - 85, y: y - 12, size: 8, font: fontBold, color: cDark });
 
     const istMehrtaegig = Boolean(kurs.ist_mehrtaegig);
     const startD = kurs.datum ? formatDateGerman(parseGermanDate(kurs.datum)) : "–";
 
-    y -= 16;
+    y -= 17;
     if (summen.vorbereitungDauer > 0) {
       // Zeile 1: Unterricht
-      page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
-      drawSafe(startD, { x: leftX + 6, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-      drawSafe(`${kurs.titel || '–'} (${kurs.ag || '–'}) [Durchführung]`.slice(0, 48), { x: leftX + 85, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-      drawSafe(`${summen.unterrichtDauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-      drawSafe(`${summen.unterrichtHonorar.toFixed(2)} €`, { x: rightX - 65, y: y - 11, size: 7.5, font: fontBold, color: cDark });
-      y -= 16;
+      page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
+      drawSafe(startD, { x: leftX + 6, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+      drawSafe(`${kurs.titel || '–'} (${kurs.ag || '–'}) [Durchführung]`.slice(0, 48), { x: leftX + 85, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+      drawSafe(`${summen.unterrichtDauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+      drawSafe(`${summen.unterrichtHonorar.toFixed(2)} €`, { x: rightX - 65, y: y - 12, size: 7.5, font: fontBold, color: cDark });
+      y -= 17;
 
       // Zeile 2: Vorbereitungspauschale
-      page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(0.973, 0.980, 0.988), borderColor: cBorder, borderWidth: 0.5 });
-      drawSafe("–", { x: leftX + 6, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-      drawSafe("Vorbereitungs- & Rüstzeitpauschale (Vereinsbeschluss)", { x: leftX + 85, y: y - 11, size: 7.5, font: fontItalic, color: cDark });
-      drawSafe(`${summen.vorbereitungDauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-      drawSafe(`${summen.vorbereitungHonorar.toFixed(2)} €`, { x: rightX - 65, y: y - 11, size: 7.5, font: fontBold, color: cDark });
-      y -= 16;
+      page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: rgb(0.973, 0.980, 0.988), borderColor: cBorder, borderWidth: 0.5 });
+      drawSafe("–", { x: leftX + 6, y: y - 12, size: 8, font: fontRegular, color: cDark });
+      drawSafe("Vorbereitungs- & Rüstzeitpauschale (Vereinsbeschluss)", { x: leftX + 85, y: y - 12, size: 7.5, font: fontItalic, color: cDark });
+      drawSafe(`${summen.vorbereitungDauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+      drawSafe(`${summen.vorbereitungHonorar.toFixed(2)} €`, { x: rightX - 65, y: y - 12, size: 7.5, font: fontBold, color: cDark });
+      y -= 17;
 
       // Zeile 3: Summe Honorar
-      page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
-      drawSafe("Honoraranspruch Gesamt (inkl. Vorbereitung):", { x: leftX + 6, y: y - 11, size: 7.5, font: fontBold, color: cDark });
-      drawSafe(`${summen.dauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 11, size: 7.5, font: fontBold, color: cDark });
-      drawSafe(`${summen.honorar.toFixed(2)} €`, { x: rightX - 65, y: y - 11, size: 7.5, font: fontBold, color: cDark });
+      page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
+      drawSafe("Honoraranspruch Gesamt (inkl. Vorbereitung):", { x: leftX + 6, y: y - 12, size: 7.5, font: fontBold, color: cDark });
+      drawSafe(`${summen.dauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 12, size: 7.5, font: fontBold, color: cDark });
+      drawSafe(`${summen.honorar.toFixed(2)} €`, { x: rightX - 65, y: y - 12, size: 8, font: fontBold, color: cDark });
       y -= 22;
     } else {
       page.drawRectangle({ x: leftX, y: y - 18, width: tblW, height: 18, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
@@ -228,7 +248,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
       drawSafe(`${kurs.titel || '–'} (${kurs.ag || '–'})`.slice(0, 50), { x: leftX + 85, y: y - 12, size: 8, font: fontRegular, color: cDark });
       drawSafe(`${summen.dauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 12, size: 8, font: fontRegular, color: cDark });
       drawSafe(`${summen.honorar.toFixed(2)} €`, { x: rightX - 65, y: y - 12, size: 8, font: fontBold, color: cDark });
-      y -= 28;
+      y -= 24;
     }
   }
 
@@ -240,65 +260,70 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   drawSafe(auslagenTitle, { x: leftX, y, size: 10, font: fontBold, color: (modus === "besorgung") ? rgb(0.051, 0.580, 0.541) : cPrim });
   y -= 6;
 
-  page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(0.886, 0.910, 0.941), borderColor: cBorder, borderWidth: 0.5 });
-  drawSafe("Datum", { x: leftX + 6, y: y - 11, size: 8, font: fontBold, color: cDark });
-  drawSafe("Händler / Verwendungszweck", { x: leftX + 85, y: y - 11, size: 8, font: fontBold, color: cDark });
-  drawSafe("Belegnachweis", { x: leftX + 345, y: y - 11, size: 8, font: fontBold, color: cDark });
-  drawSafe("Betrag", { x: rightX - 60, y: y - 11, size: 8, font: fontBold, color: cDark });
-  y -= 16;
+  page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: rgb(0.886, 0.910, 0.941), borderColor: cBorder, borderWidth: 0.5 });
+  drawSafe("Datum", { x: leftX + 6, y: y - 12, size: 8, font: fontBold, color: cDark });
+  drawSafe("Händler / Verwendungszweck", { x: leftX + 85, y: y - 12, size: 8, font: fontBold, color: cDark });
+  drawSafe("Belegnachweis", { x: leftX + 345, y: y - 12, size: 8, font: fontBold, color: cDark });
+  drawSafe("Betrag", { x: rightX - 60, y: y - 12, size: 8, font: fontBold, color: cDark });
+  y -= 17;
 
   const belList = belege && belege.length > 0 ? belege : [{ datum: "–", zweck: "Keine Materialauslagen geltend gemacht", betrag: 0, datei: null }];
   let bIdx = 1;
   for (const b of belList) {
-    page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
-    drawSafe(String(b.datum || '–'), { x: leftX + 6, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-    drawSafe(String(b.zweck || '').slice(0, 48), { x: leftX + 85, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
+    drawSafe(String(b.datum || '–'), { x: leftX + 6, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe(String(b.zweck || '').slice(0, 48), { x: leftX + 85, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
     const nachweis = b.dateiName ? `Anhang #${bIdx}` : (b.datum === '–' ? '–' : 'Eigenbeleg');
-    drawSafe(nachweis, { x: leftX + 345, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-    drawSafe(`${parseFloat(b.betrag || 0).toFixed(2)} €`, { x: rightX - 60, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
-    y -= 16;
+    drawSafe(nachweis, { x: leftX + 345, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe(`${parseFloat(b.betrag || 0).toFixed(2)} €`, { x: rightX - 60, y: y - 12, size: 7.5, font: fontRegular, color: cDark });
+    y -= 17;
     if (b.dateiName) bIdx++;
   }
 
   // Summenzeile Auslagen
-  page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
-  drawSafe("Gesamtsumme Auslagen:", { x: leftX + 6, y: y - 11, size: 8, font: fontBold, color: cDark });
-  drawSafe(`${summen.auslagen.toFixed(2)} €`, { x: rightX - 60, y: y - 11, size: 8, font: fontBold, color: cDark });
-  y -= 24;
+  page.drawRectangle({ x: leftX, y: y - 17, width: tblW, height: 17, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
+  drawSafe("Gesamtsumme Auslagen:", { x: leftX + 6, y: y - 12, size: 8, font: fontBold, color: cDark });
+  drawSafe(`${summen.auslagen.toFixed(2)} €`, { x: rightX - 60, y: y - 12, size: 8, font: fontBold, color: cDark });
+  y -= 22;
 
   // --- GESAMTAUSZAHLUNG & VERWENDUNGSZWECK ---
   page.drawRectangle({
     x: leftX,
-    y: y - 26,
+    y: y - 28,
     width: contentWidth,
-    height: 26,
+    height: 28,
     color: rgb(0.863, 0.988, 0.906), // #dcfce7
     borderColor: rgb(0.086, 0.639, 0.290), // #16a34a
     borderWidth: 1,
   });
   const labelGesamt = (modus === "besorgung") ? "Zur Erstattung fälliger Gesamtbetrag:" : "Zur Auszahlung fälliger Gesamtbetrag:";
-  drawSafe(labelGesamt, { x: leftX + 10, y: y - 17, size: 10, font: fontBold, color: rgb(0.078, 0.325, 0.176) });
-  drawSafe(`${summen.gesamt.toFixed(2)} €`, { x: rightX - 85, y: y - 17, size: 11, font: fontBold, color: rgb(0.078, 0.325, 0.176) });
-  y -= 32;
+  drawSafe(labelGesamt, { x: leftX + 10, y: y - 18, size: 10.5, font: fontBold, color: rgb(0.078, 0.325, 0.176) });
+  drawSafe(`${summen.gesamt.toFixed(2)} €`, { x: rightX - 85, y: y - 18, size: 12, font: fontBold, color: rgb(0.078, 0.325, 0.176) });
+  y -= 34;
 
   // Referenz / Verwendungszweck Kasten
   const refCode = (modus === "besorgung") ? (besorgung?.id || "BESORGUNG") : (kurs?.id || "KURS");
   const refText = `${refCode} ${stamm.leiter || ''}`.trim();
-  page.drawRectangle({ x: leftX, y: y - 18, width: contentWidth, height: 18, color: rgb(0.945, 0.961, 0.976), borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.5 });
-  drawSafe("Empfohlener Verwendungszweck für Überweisung:", { x: leftX + 8, y: y - 12, size: 8, font: fontRegular, color: cDark });
-  drawSafe(refText, { x: leftX + 235, y: y - 12, size: 8.5, font: fontBold, color: cPrim });
+  page.drawRectangle({ x: leftX, y: y - 19, width: contentWidth, height: 19, color: rgb(0.945, 0.961, 0.976), borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.5 });
+  drawSafe("Empfohlener Verwendungszweck für Überweisung:", { x: leftX + 8, y: y - 13, size: 8, font: fontRegular, color: cDark });
+  drawSafe(refText, { x: leftX + 235, y: y - 13, size: 8.5, font: fontBold, color: cPrim });
   y -= 24;
 
-  // --- RECHTLICHE HINWEISE & AUSSCHLUSSFRIST ---
-  page.drawRectangle({ x: leftX, y: y - 36, width: contentWidth, height: 36, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
+  // --- RECHTLICHE HINWEISE & AUSSCHLUSSFRIST (SAUBER UMBROCHEN) ---
   const rechtstext = (modus === "besorgung")
     ? "Wichtige Hinweise zur Auslagenerstattung: Auslagen für Vereinsveranstaltungen und Sachbedarf sind im jeweiligen laufenden Schuljahr einzureichen. Die Ausschlussfrist endet mit Beginn der Kassenprüfung vor den Sommerferien. Alle Belege müssen im Original oder als eindeutiger digitaler Belegnachweis vorliegen."
     : "Wichtige Hinweise & Ausschlussfrist: Die Abrechnung für geleistete Stunden hat jeweils blockweise zu erfolgen. Der Abrechnungszeitraum läuft vom Tag nach Ferienende bis zum letzten Tag der kommenden Schulferien bzw. den letzten Schultag vor den Sommerferien. Später eingehende Honorar- oder Aufwandsansprüche verfallen aus gemeinnützigkeitsrechtlichen Gründen endgültig nach Beginn der Kassenprüfung vor den Sommerferien.";
 
-  drawSafe(rechtstext.slice(0, 155), { x: leftX + 6, y: y - 11, size: 6.2, font: fontRegular, color: cGray });
-  drawSafe(rechtstext.slice(155, 310), { x: leftX + 6, y: y - 19, size: 6.2, font: fontRegular, color: cGray });
-  drawSafe(rechtstext.slice(310), { x: leftX + 6, y: y - 27, size: 6.2, font: fontRegular, color: cGray });
-  y -= 42;
+  const rechtsLines = wrapTextToWidth(rechtstext, contentWidth - 14, fontRegular, 6.5);
+  const rH = Math.max(34, 12 + rechtsLines.length * 8.5);
+
+  page.drawRectangle({ x: leftX, y: y - rH, width: contentWidth, height: rH, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
+  let rY = y - 10;
+  for (const line of rechtsLines) {
+    drawSafe(line, { x: leftX + 7, y: rY, size: 6.5, font: fontRegular, color: cGray });
+    rY -= 8.5;
+  }
+  y -= (rH + 10);
 
   // Formular (AcroForms) initialisieren
   const form = pdfDoc.getForm();
@@ -306,82 +331,92 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   // --- KASTEN 1: ANTRAGSTELLER / KURSLEITER ---
   const notizText = (modus === "besorgung") ? (besorgung?.notizen || "") : (kurs?.notizen || "");
   const hatNotiz = Boolean(notizText && notizText.trim());
-  const k1H = hatNotiz ? 58 : 50;
+
+  const steuerText = (modus === "besorgung")
+    ? "Ich versichere die Richtigkeit der vorstehenden Angaben und dass die Auslagen ausschließlich für satzungsgemäße Zwecke des Fördervereins der Grundschule getätigt wurden und nicht anderweitig erstattet werden."
+    : "Ich versichere, dass die Leistungen ordnungsgemäß erbracht wurden und im Rahmen des Ehrenamts- bzw. Übungsleiterfreibetrags (§ 3 Nr. 26/26a EStG) erfolgen. Freibeträge werden nicht überschritten.";
+
+  // Textbreite auf maximal 505 pt beschränken, damit er NIEMALS rechts herausragt
+  const steuerLines = wrapTextToWidth(steuerText, contentWidth - 16, fontRegular, 6.8);
+  const k1H = hatNotiz ? 74 : 64;
 
   page.drawRectangle({ x: leftX, y: y - k1H, width: contentWidth, height: k1H, color: cBgHell, borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.65 });
   const k1Title = (modus === "besorgung")
     ? "1. Antragsteller (Eigenerklärung & Unterschrift)"
     : "1. Kursleiter / Auftragnehmer (Eigenerklärung & Unterschrift)";
-  drawSafe(k1Title, { x: leftX + 8, y: y - 11, size: 8, font: fontBold, color: cDark });
+  drawSafe(k1Title, { x: leftX + 8, y: y - 12, size: 8.5, font: fontBold, color: cDark });
 
-  const steuerText = (modus === "besorgung")
-    ? "Ich versichere die Richtigkeit der vorstehenden Angaben und dass die Auslagen ausschließlich für Zwecke des Fördervereins der Grundschule getätigt wurden und nicht anderweitig erstattet werden."
-    : "Ich versichere, dass die Leistungen ordnungsgemäß erbracht wurden und im Rahmen des Ehrenamts- bzw. Übungsleiterfreibetrags (§ 3 Nr. 26/26a EStG) erfolgen. Freibeträge werden nicht überschritten.";
+  // Mehrzeiliger Eigenerklärungstext
+  let stY = y - 22;
+  for (const sLine of steuerLines) {
+    drawSafe(sLine, { x: leftX + 8, y: stY, size: 6.8, font: fontRegular, color: cGray });
+    stY -= 8.5;
+  }
 
-  drawSafe(steuerText, { x: leftX + 8, y: y - 21, size: 6.2, font: fontRegular, color: cGray });
-
+  // Optionale Notiz des Kursleiters / Antragstellers
   if (hatNotiz) {
     const lblBem = (modus === "besorgung") ? "Bemerkung des Antragstellers: " : "Bemerkung des Kursleiters: ";
-    drawSafe(`${lblBem}${notizText.trim()}`.slice(0, 95), { x: leftX + 8, y: y - 31, size: 6.8, font: fontItalic, color: cPrim });
-    drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - 46, size: 7.5, font: fontRegular, color: cDark });
-    page.drawLine({ start: { x: rightX - 180, y: y - 44 }, end: { x: rightX - 10, y: y - 44 }, thickness: 0.5, color: cGray });
-    drawSafe("Unterschrift des Antragstellers", { x: rightX - 150, y: y - 52, size: 6.5, font: fontRegular, color: cGray });
-  } else {
-    drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - 38, size: 8, font: fontRegular, color: cDark });
-    page.drawLine({ start: { x: rightX - 180, y: y - 36 }, end: { x: rightX - 10, y: y - 36 }, thickness: 0.5, color: cGray });
-    drawSafe("Unterschrift des Antragstellers", { x: rightX - 150, y: y - 44, size: 6.5, font: fontRegular, color: cGray });
+    const bemLines = wrapTextToWidth(`${lblBem}${notizText.trim()}`, contentWidth - 16, fontItalic, 7.0);
+    drawSafe(bemLines[0] || "", { x: leftX + 8, y: stY - 2, size: 7.0, font: fontItalic, color: cPrim });
   }
-  y -= (k1H + 6);
+
+  // Ort, Datum & Unterschriftszeile (unten im Kasten sauber platziert)
+  drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - k1H + 12, size: 8, font: fontRegular, color: cDark });
+  page.drawLine({ start: { x: rightX - 180, y: y - k1H + 18 }, end: { x: rightX - 10, y: y - k1H + 18 }, thickness: 0.5, color: cGray });
+  const sigLabel = (modus === "besorgung") ? "Unterschrift des Antragstellers" : "Unterschrift des Kursleiters";
+  drawSafe(sigLabel, { x: rightX - 150, y: y - k1H + 8, size: 6.5, font: fontRegular, color: cGray });
+
+  y -= (k1H + 8);
 
   // --- KASTEN 2: VORSTAND (AcroForms) ---
-  const k2H = 54;
+  const k2H = 58;
   page.drawRectangle({ x: leftX, y: y - k2H, width: contentWidth, height: k2H, color: cBgHell, borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.65 });
   const k2Title = (modus === "besorgung")
     ? "2. Sachlich & rechnerisch geprüft / Erstattung genehmigt (Vorstand)"
     : "2. Sachlich & rechnerisch geprüft / Auszahlung genehmigt (Vorstand)";
-  drawSafe(k2Title, { x: leftX + 8, y: y - 11, size: 8, font: fontBold, color: cDark });
+  drawSafe(k2Title, { x: leftX + 8, y: y - 12, size: 8.5, font: fontBold, color: cDark });
 
-  drawSafe("Geprüft & genehmigt am:", { x: leftX + 8, y: y - 26, size: 7.5, font: fontRegular, color: cDark });
+  drawSafe("Geprüft & genehmigt am:", { x: leftX + 8, y: y - 28, size: 7.5, font: fontRegular, color: cDark });
   const tfVorstandDatum = form.createTextField('vorstand_datum');
   tfVorstandDatum.setText('');
-  tfVorstandDatum.addToPage(page, { x: leftX + 115, y: y - 30, width: 85, height: 16 });
+  tfVorstandDatum.addToPage(page, { x: leftX + 115, y: y - 32, width: 85, height: 16 });
 
-  drawSafe("Vorstand / Visum:", { x: leftX + 245, y: y - 26, size: 7.5, font: fontBold, color: cGray });
+  drawSafe("Vorstand / Visum:", { x: leftX + 245, y: y - 28, size: 7.5, font: fontBold, color: cGray });
   const tfVorstandSignatur = form.createTextField('vorstand_signatur');
   tfVorstandSignatur.setText('');
-  tfVorstandSignatur.addToPage(page, { x: leftX + 340, y: y - 30, width: 140, height: 16 });
+  tfVorstandSignatur.addToPage(page, { x: leftX + 340, y: y - 32, width: 140, height: 16 });
 
-  drawSafe("Notizen / Prüfvermerk:", { x: leftX + 8, y: y - 44, size: 7.5, font: fontBold, color: cGray });
+  drawSafe("Notizen / Prüfvermerk:", { x: leftX + 8, y: y - 48, size: 7.5, font: fontBold, color: cGray });
   const tfVorstandNotizen = form.createTextField('vorstand_notizen');
   tfVorstandNotizen.setText('');
-  tfVorstandNotizen.addToPage(page, { x: leftX + 115, y: y - 48, width: 365, height: 16 });
-  y -= (k2H + 6);
+  tfVorstandNotizen.addToPage(page, { x: leftX + 115, y: y - 52, width: 365, height: 16 });
+  y -= (k2H + 8);
 
   // --- KASTEN 3: KASSENWART (AcroForms) ---
-  const k3H = 58;
+  const k3H = 62;
   page.drawRectangle({ x: leftX, y: y - k3H, width: contentWidth, height: k3H, color: rgb(0.941, 0.992, 0.957), borderColor: rgb(0.086, 0.639, 0.290), borderWidth: 0.75 });
-  drawSafe("3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts", { x: leftX + 8, y: y - 11, size: 8, font: fontBold, color: cDark });
+  drawSafe("3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts", { x: leftX + 8, y: y - 12, size: 8.5, font: fontBold, color: cDark });
 
-  drawSafe("Angewiesener Betrag:", { x: leftX + 8, y: y - 26, size: 7.5, font: fontRegular, color: cDark });
+  drawSafe("Angewiesener Betrag:", { x: leftX + 8, y: y - 28, size: 7.5, font: fontRegular, color: cDark });
   const tfKwBetrag = form.createTextField('kassenwart_betrag');
   tfKwBetrag.setText('');
-  tfKwBetrag.addToPage(page, { x: leftX + 110, y: y - 30, width: 65, height: 16 });
-  drawSafe("€", { x: leftX + 180, y: y - 26, size: 8, font: fontRegular, color: cDark });
+  tfKwBetrag.addToPage(page, { x: leftX + 110, y: y - 32, width: 65, height: 16 });
+  drawSafe("€", { x: leftX + 180, y: y - 28, size: 8, font: fontRegular, color: cDark });
 
-  drawSafe("Überwiesen am:", { x: leftX + 215, y: y - 26, size: 7.5, font: fontRegular, color: cDark });
+  drawSafe("Überwiesen am:", { x: leftX + 215, y: y - 28, size: 7.5, font: fontRegular, color: cDark });
   const tfKwDatum = form.createTextField('kassenwart_datum');
   tfKwDatum.setText('');
-  tfKwDatum.addToPage(page, { x: leftX + 285, y: y - 30, width: 75, height: 16 });
+  tfKwDatum.addToPage(page, { x: leftX + 285, y: y - 32, width: 75, height: 16 });
 
-  drawSafe("Kassenwart / Visum:", { x: leftX + 375, y: y - 26, size: 7, font: fontBold, color: cGray });
+  drawSafe("Kassenwart / Visum:", { x: leftX + 375, y: y - 28, size: 7, font: fontBold, color: cGray });
   const tfKwSignatur = form.createTextField('kassenwart_signatur');
   tfKwSignatur.setText('');
-  tfKwSignatur.addToPage(page, { x: leftX + 450, y: y - 30, width: 65, height: 16 });
+  tfKwSignatur.addToPage(page, { x: leftX + 450, y: y - 32, width: 65, height: 16 });
 
-  drawSafe("Notizen / Buchungsvermerk:", { x: leftX + 8, y: y - 48, size: 7.5, font: fontBold, color: cGray });
+  drawSafe("Notizen / Buchungsvermerk:", { x: leftX + 8, y: y - 50, size: 7.5, font: fontBold, color: cGray });
   const tfKwNotizen = form.createTextField('kassenwart_notizen');
   tfKwNotizen.setText('');
-  tfKwNotizen.addToPage(page, { x: leftX + 130, y: y - 52, width: 350, height: 16 });
+  tfKwNotizen.addToPage(page, { x: leftX + 130, y: y - 54, width: 350, height: 16 });
 
   // --- BELEGE ANHÄNGEN (BILDER & PDFS) ---
   let belegNr = 1;
@@ -441,12 +476,12 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     sanitizeForPdf(`IBAN=${stamm.iban || ''}`),
     sanitizeForPdf(`Modus=${modus}`)
   ]);
-  pdfDoc.setCreator("Förderverein Grundschule – Abrechnungs-Manager v1.0.0 (PWA)");
+  pdfDoc.setCreator("Förderverein Grundschule – Abrechnungs-Manager v1.1.0 (PWA)");
 
   // Maschinenlesbares JSON-Attachment einbetten
   const metaPayload = {
     schema_version: "1.1",
-    app_version: "1.0.0",
+    app_version: "1.1.0",
     modus: modus,
     erstellt_am: new Date().toISOString(),
     stammdaten: stamm,
