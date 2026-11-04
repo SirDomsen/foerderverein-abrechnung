@@ -668,7 +668,7 @@ function updateLiveUebersicht() {
 
     if (bDateParsed) {
       const bSj = ermittleSchuljahrDetails(bDateParsed);
-      periodeText = `Schuljahr ${bSj.code} (Laufendes Schuljahr)`;
+      periodeText = `${bSj.label || ('Schuljahr ' + bSj.code)} (Laufendes Schuljahr)`;
       warns = pruefeBesorgungDatumPlausibilitaet(bDateParsed);
     } else {
       periodeText = "Laufendes Schuljahr";

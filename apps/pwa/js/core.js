@@ -105,7 +105,8 @@ function ermittleSchuljahrDetails(datum) {
       const startY = (sfStart.getFullYear() - 1) % 100;
       const endY = sfStart.getFullYear() % 100;
       const sjCode = `SJ${String(startY).padStart(2, '0')}${String(endY).padStart(2, '0')}`;
-      return { code: sjCode, start: sjStart, ende: sjEnde, letzterSchultag };
+      const sjKurz = `${String(startY).padStart(2, '0')}/${String(endY).padStart(2, '0')}`;
+      return { code: sjCode, kurz: sjKurz, label: `Schuljahr ${sjKurz}`, start: sjStart, ende: sjEnde, letzterSchultag };
     }
   }
 
@@ -125,8 +126,11 @@ function ermittleSchuljahrDetails(datum) {
     sjEnde = new Date(y, 8, 11);
     letzterTag = new Date(y, 6, 28);
   }
+  const sjKurz = `${String(startY).padStart(2, '0')}/${String(endY).padStart(2, '0')}`;
   return {
     code: `SJ${String(startY).padStart(2, '0')}${String(endY).padStart(2, '0')}`,
+    kurz: sjKurz,
+    label: `Schuljahr ${sjKurz}`,
     start: sjStart,
     ende: sjEnde,
     letzterSchultag: letzterTag

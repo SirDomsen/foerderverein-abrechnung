@@ -130,7 +130,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
   // --- STAMMDATEN-KASTEN ---
   y -= 12;
   let stammFields = [];
-  let kastenHeight = 96;
+  let kastenHeight = 104; // Vergrößert für sauberen 2-zeiligen Abrechnungszeitraum
 
   if (modus === "besorgung") {
     const b = besorgung || {};
@@ -142,7 +142,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
       { label1: "Antragsteller / Person:", val1: stamm.leiter || "–", label2: "Beleg-ID / Referenz:", val2: b.id || "–", bold: true },
       { label1: "Anschrift:", val1: stamm.anschrift || "–", label2: "Anlass / Veranstaltung:", val2: b.anlass || "–" },
       { label1: "Telefon / E-Mail:", val1: stamm.telefon || "–", label2: "Verwendungszweck:", val2: b.zweck || "–" },
-      { label1: "IBAN:", val1: formatiereIBAN(stamm.iban) || "–", label2: "Abrechnungszeitraum:", val2: `Schuljahr ${bSj.code} (${formatDateGerman(bDatumParsed)})` }
+      { label1: "IBAN:", val1: formatiereIBAN(stamm.iban) || "–", label2: "Abrechnungszeitraum:", val2: bSj.label || `Schuljahr ${bSj.code}` }
     ];
   } else {
     // Modus Kurs
@@ -181,7 +181,32 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     drawSafe(String(row.val1).slice(0, 32), { x: leftX + 110, y: rowY, size: 8, font: row.bold ? fontBold : fontRegular, color: cDark });
 
     drawSafe(row.label2, { x: leftX + 265, y: rowY, size: 7.5, font: fontBold, color: cGray });
-    drawSafe(String(row.val2).slice(0, 38), { x: leftX + 375, y: rowY, size: 8, font: row.bold ? fontBold : fontRegular, color: cDark });
+
+    // Wenn der Wert zu lang ist (z. B. Abrechnungszeitraum), sauber an Wortgrenzen in nächste Zeile umbrechen
+    const maxVal2W = rightX - (leftX + 375) - 6; // ca. 142 pt
+    const val2Lines = wrapTextToWidth(String(row.val2), maxVal2W, fontRegular, 8);
+    if (val2Lines.length > 1) {
+      let subY = rowY;
+      for (let li = 0; li < Math.min(val2Lines.length, 2); li++) {
+        drawSafe(val2Lines[li], {
+          x: leftX + 375,
+          y: subY,
+          size: (li === 0 ? 8 : 7.5),
+          font: row.bold ? fontBold : fontRegular,
+          color: cDark
+        });
+        subY -= 9.5;
+      }
+    } else {
+      drawSafe(String(row.val2), {
+        x: leftX + 375,
+        y: rowY,
+        size: 8,
+        font: row.bold ? fontBold : fontRegular,
+        color: cDark
+      });
+    }
+
     rowY -= 16;
   }
 
