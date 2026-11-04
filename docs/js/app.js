@@ -40,6 +40,7 @@ const AppState = {
     stundensatz: DEFAULT_STUNDENSATZ,
     admin_pin: DEFAULT_ADMIN_PIN
   },
+  unterschrift: null, // DataURL string oder null
   aktuelleDatei: null // { name, type, data (Uint8Array) }
 };
 
@@ -93,6 +94,11 @@ function ladeLokaleDaten() {
     const sBelege = localStorage.getItem('fv_belege');
     if (sBelege) {
       AppState.belege = JSON.parse(sBelege) || [];
+    }
+
+    const sSig = localStorage.getItem('fv_abrechnung_unterschrift');
+    if (sSig) {
+      AppState.unterschrift = sSig;
     }
   } catch (e) {
     console.error("Fehler beim Laden von localStorage:", e);
@@ -184,6 +190,7 @@ function renderUI() {
   setzeModus(AppState.modus || 'kurs');
 
   renderBelegeListe();
+  updateSignatureUI();
 }
 
 function toggleMehrtaegigUI(isMehr) {
@@ -327,6 +334,15 @@ function initEventListeners() {
 
   // PDF Export & Senden
   document.getElementById('btnExportPdf').addEventListener('click', starteExportProzess);
+
+  // Digitale Unterschrift
+  document.getElementById('btnOpenSignature').addEventListener('click', oeffneUnterschriftsModal);
+  document.getElementById('btnSigClear').addEventListener('click', leereUnterschriftCanvas);
+  document.getElementById('btnSigUebernehmen').addEventListener('click', uebernehmeUnterschrift);
+  document.getElementById('btnSigOhne').addEventListener('click', () => {
+    schliesseUnterschriftsModal();
+    fahreMitPdfExportFort(false);
+  });
 }
 
 // Beleg hinzufügen
@@ -666,33 +682,218 @@ async function starteExportProzess() {
         return;
       }
     }
-
-    dateiname = generiereDateiname(AppState.kurs.datum, AppState.kurs.titel, AppState.stamm.leiter, AppState.kurs.id, "kurs");
   }
+
+  // Falls noch keine Unterschrift vorhanden ist -> Abfrage per Dialog
+  if (!AppState.unterschrift) {
+    oeffneUnterschriftsModal();
+    return;
+  }
+
+  // Ansonsten direkt mit hinterlegter Unterschrift fortfahren
+  fahreMitPdfExportFort(true);
+}
+
+// Führt den eigentlichen PDF-Export durch
+async function fahreMitPdfExportFort(mitUnterschrift = true) {
+  const isBesorgung = (AppState.modus === 'besorgung');
+  const dateiname = isBesorgung
+    ? generiereDateiname(AppState.besorgung.datum, AppState.besorgung.anlass, AppState.stamm.leiter, AppState.besorgung.id, "besorgung")
+    : generiereDateiname(AppState.kurs.datum, AppState.kurs.titel, AppState.stamm.leiter, AppState.kurs.id, "kurs");
 
   const btn = document.getElementById('btnExportPdf');
   btn.disabled = true;
   btn.textContent = "⏳ PDF wird erstellt & Belege eingebettet...";
 
   try {
+    const sigToUse = mitUnterschrift ? AppState.unterschrift : null;
     const pdfBytes = await erzeugeAbrechnungPDF(
       AppState.stamm,
       AppState.kurs,
       AppState.belege,
       AppState.modus,
-      AppState.besorgung
+      AppState.besorgung,
+      sigToUse
     );
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
 
     btn.disabled = false;
-    btn.textContent = "📄 Abrechnung prüfen & als PDF exportieren";
+    btn.textContent = "📄 Abrechnung prüfen & PDF exportieren";
 
     oeffneErfolgsModal(blob, dateiname);
   } catch (err) {
     btn.disabled = false;
-    btn.textContent = "📄 Abrechnung prüfen & als PDF exportieren";
+    btn.textContent = "📄 Abrechnung prüfen & PDF exportieren";
     alert(`Fehler bei der PDF-Erstellung:\n${err.message}`);
     console.error(err);
+  }
+}
+
+// --- DIGITALE UNTERSCHRIFT (CANVAS & EVENTS) ---
+let sigCanvasInited = false;
+let sigCtx = null;
+let sigDrawing = false;
+let sigHasStrokes = false;
+
+function initSignaturePad() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas) return;
+  sigCtx = canvas.getContext('2d');
+
+  if (sigCanvasInited) return;
+  sigCanvasInited = true;
+
+  function getCanvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = (e.touches && e.touches.length > 0) ? e.touches[0].clientX : e.clientX;
+    const clientY = (e.touches && e.touches.length > 0) ? e.touches[0].clientY : e.clientY;
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    };
+  }
+
+  function startStroke(e) {
+    e.preventDefault();
+    sigDrawing = true;
+    sigHasStrokes = true;
+    const placeholder = document.getElementById('sigPlaceholder');
+    if (placeholder) placeholder.style.display = 'none';
+
+    const coords = getCanvasCoords(e);
+    sigCtx.beginPath();
+    sigCtx.moveTo(coords.x, coords.y);
+  }
+
+  function moveStroke(e) {
+    if (!sigDrawing) return;
+    e.preventDefault();
+    const coords = getCanvasCoords(e);
+    sigCtx.lineTo(coords.x, coords.y);
+    sigCtx.stroke();
+  }
+
+  function endStroke(e) {
+    if (!sigDrawing) return;
+    sigDrawing = false;
+  }
+
+  // Pointer events (Touch, Stylus & Maus)
+  canvas.addEventListener('pointerdown', startStroke);
+  canvas.addEventListener('pointermove', moveStroke);
+  canvas.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('pointercancel', endStroke);
+
+  // Touch fallback
+  canvas.addEventListener('touchstart', startStroke, { passive: false });
+  canvas.addEventListener('touchmove', moveStroke, { passive: false });
+  canvas.addEventListener('touchend', endStroke);
+}
+
+function resizeSignatureCanvas() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+
+  if (sigCtx) {
+    sigCtx.scale(dpr, dpr);
+    sigCtx.lineCap = 'round';
+    sigCtx.lineJoin = 'round';
+    sigCtx.lineWidth = 2.6;
+    sigCtx.strokeStyle = '#0f172a';
+  }
+
+  if (AppState.unterschrift) {
+    const img = new Image();
+    img.onload = () => {
+      if (sigCtx) {
+        sigCtx.drawImage(img, 0, 0, rect.width, rect.height);
+        sigHasStrokes = true;
+        const placeholder = document.getElementById('sigPlaceholder');
+        if (placeholder) placeholder.style.display = 'none';
+      }
+    };
+    img.src = AppState.unterschrift;
+  }
+}
+
+function oeffneUnterschriftsModal() {
+  const modal = document.getElementById('modalUnterschrift');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  initSignaturePad();
+  setTimeout(() => {
+    resizeSignatureCanvas();
+    const placeholder = document.getElementById('sigPlaceholder');
+    if (AppState.unterschrift) {
+      if (placeholder) placeholder.style.display = 'none';
+    } else {
+      if (placeholder && !sigHasStrokes) placeholder.style.display = 'flex';
+    }
+  }, 60);
+}
+
+window.schliesseUnterschriftsModal = function() {
+  const modal = document.getElementById('modalUnterschrift');
+  if (modal) modal.classList.add('hidden');
+};
+
+function leereUnterschriftCanvas() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas || !sigCtx) return;
+  const rect = canvas.getBoundingClientRect();
+  sigCtx.clearRect(0, 0, rect.width, rect.height);
+  sigHasStrokes = false;
+  AppState.unterschrift = null;
+  localStorage.removeItem('fv_abrechnung_unterschrift');
+  const placeholder = document.getElementById('sigPlaceholder');
+  if (placeholder) placeholder.style.display = 'flex';
+  updateSignatureUI();
+}
+
+function uebernehmeUnterschrift() {
+  const canvas = document.getElementById('sigCanvas');
+  if (!canvas) return;
+
+  if (sigHasStrokes) {
+    const dataUrl = canvas.toDataURL('image/png');
+    AppState.unterschrift = dataUrl;
+
+    const chkMerken = document.getElementById('chkSigMerken');
+    if (chkMerken && chkMerken.checked) {
+      try {
+        localStorage.setItem('fv_abrechnung_unterschrift', dataUrl);
+      } catch (e) {
+        console.warn("LocalStorage Quota:", e);
+      }
+    } else {
+      localStorage.removeItem('fv_abrechnung_unterschrift');
+    }
+  }
+
+  updateSignatureUI();
+  schliesseUnterschriftsModal();
+
+  fahreMitPdfExportFort(Boolean(AppState.unterschrift));
+}
+
+function updateSignatureUI() {
+  const lblStatus = document.getElementById('lblSigStatus');
+  const btnLabel = document.getElementById('lblBtnOpenSignature');
+  if (!lblStatus || !btnLabel) return;
+
+  if (AppState.unterschrift) {
+    lblStatus.innerHTML = '<span class="text-emerald-600 font-bold">✓ Unterschrift hinterlegt</span>';
+    btnLabel.textContent = "Ändern";
+  } else {
+    lblStatus.innerHTML = '<span class="text-slate-500 font-medium">✍️ Noch keine Unterschrift</span>';
+    btnLabel.textContent = "Unterschreiben";
   }
 }
 

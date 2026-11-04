@@ -51,7 +51,7 @@ function wrapTextToWidth(text, maxWidth, font, size) {
   return lines;
 }
 
-async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgung = null) {
+async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgung = null, unterschriftDataUrl = null) {
   const { PDFDocument, rgb, StandardFonts } = PDFLib;
 
   const pdfDoc = await PDFDocument.create();
@@ -338,7 +338,7 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
 
   // Textbreite auf maximal 505 pt beschränken, damit er NIEMALS rechts herausragt
   const steuerLines = wrapTextToWidth(steuerText, contentWidth - 16, fontRegular, 6.8);
-  const k1H = hatNotiz ? 74 : 64;
+  const k1H = hatNotiz ? 90 : 80;
 
   page.drawRectangle({ x: leftX, y: y - k1H, width: contentWidth, height: k1H, color: cBgHell, borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.65 });
   const k1Title = (modus === "besorgung")
@@ -360,63 +360,103 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege, modus = "kurs", besorgu
     drawSafe(bemLines[0] || "", { x: leftX + 8, y: stY - 2, size: 7.0, font: fontItalic, color: cPrim });
   }
 
-  // Ort, Datum & Unterschriftszeile (unten im Kasten sauber platziert)
-  drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - k1H + 12, size: 8, font: fontRegular, color: cDark });
-  page.drawLine({ start: { x: rightX - 180, y: y - k1H + 18 }, end: { x: rightX - 10, y: y - k1H + 18 }, thickness: 0.5, color: cGray });
+  // Ort, Datum & Unterschriftszeile (unten im Kasten sauber platziert mit viel Platz)
+  drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - k1H + 14, size: 8, font: fontRegular, color: cDark });
+  page.drawLine({ start: { x: rightX - 190, y: y - k1H + 20 }, end: { x: rightX - 10, y: y - k1H + 20 }, thickness: 0.5, color: cGray });
   const sigLabel = (modus === "besorgung") ? "Unterschrift des Antragstellers" : "Unterschrift des Kursleiters";
-  drawSafe(sigLabel, { x: rightX - 150, y: y - k1H + 8, size: 6.5, font: fontRegular, color: cGray });
+  drawSafe(sigLabel, { x: rightX - 160, y: y - k1H + 9, size: 6.5, font: fontRegular, color: cGray });
+
+  // Digitale Unterschrift einbetten falls übergeben
+  if (unterschriftDataUrl) {
+    try {
+      let sigBytes;
+      if (typeof unterschriftDataUrl === 'string' && unterschriftDataUrl.startsWith('data:')) {
+        const base64Data = unterschriftDataUrl.split(',')[1];
+        const binaryString = atob(base64Data);
+        const len = binaryString.length;
+        sigBytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          sigBytes[i] = binaryString.charCodeAt(i);
+        }
+      } else {
+        sigBytes = unterschriftDataUrl;
+      }
+      const sigImg = await pdfDoc.embedPng(sigBytes);
+      const maxSigW = 160;
+      const maxSigH = 34;
+      const sigDims = sigImg.scaleToFit(maxSigW, maxSigH);
+      page.drawImage(sigImg, {
+        x: rightX - 180 + (maxSigW - sigDims.width) / 2,
+        y: y - k1H + 22,
+        width: sigDims.width,
+        height: sigDims.height,
+      });
+    } catch (e) {
+      console.warn("Digitale Unterschrift konnte nicht eingebettet werden:", e);
+    }
+  }
 
   y -= (k1H + 8);
 
   // --- KASTEN 2: VORSTAND (AcroForms) ---
-  const k2H = 58;
+  const k2H = 72; // Vergrößert für mehr Platz
   page.drawRectangle({ x: leftX, y: y - k2H, width: contentWidth, height: k2H, color: cBgHell, borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.65 });
   const k2Title = (modus === "besorgung")
     ? "2. Sachlich & rechnerisch geprüft / Erstattung genehmigt (Vorstand)"
     : "2. Sachlich & rechnerisch geprüft / Auszahlung genehmigt (Vorstand)";
-  drawSafe(k2Title, { x: leftX + 8, y: y - 12, size: 8.5, font: fontBold, color: cDark });
+  drawSafe(k2Title, { x: leftX + 8, y: y - 13, size: 8.5, font: fontBold, color: cDark });
 
-  drawSafe("Geprüft & genehmigt am:", { x: leftX + 8, y: y - 28, size: 7.5, font: fontRegular, color: cDark });
+  // Einheitliche Ausrichtungs-Parameter für Kasten 2 & 3:
+  // Alle Eingabe-Zeilen starten bündig bei xStart = leftX + 115 und enden bündig bei xEnd = leftX + 515 (Breite 400 pt)
+  const xStart = leftX + 115;
+  const xEnd = leftX + 515;
+  const fieldH = 19; // Angenehme Höhe für interaktives und handschriftliches Ausfüllen
+
+  // Zeile 1: Datum & Visum
+  drawSafe("Geprüft & genehmigt am:", { x: leftX + 8, y: y - 31, size: 7.5, font: fontRegular, color: cDark });
   const tfVorstandDatum = form.createTextField('vorstand_datum');
   tfVorstandDatum.setText('');
-  tfVorstandDatum.addToPage(page, { x: leftX + 115, y: y - 32, width: 85, height: 16 });
+  tfVorstandDatum.addToPage(page, { x: xStart, y: y - 36, width: 95, height: fieldH });
 
-  drawSafe("Vorstand / Visum:", { x: leftX + 245, y: y - 28, size: 7.5, font: fontBold, color: cGray });
+  drawSafe("Vorstand / Visum:", { x: leftX + 225, y: y - 31, size: 7.5, font: fontBold, color: cGray });
   const tfVorstandSignatur = form.createTextField('vorstand_signatur');
   tfVorstandSignatur.setText('');
-  tfVorstandSignatur.addToPage(page, { x: leftX + 340, y: y - 32, width: 140, height: 16 });
+  tfVorstandSignatur.addToPage(page, { x: leftX + 310, y: y - 36, width: (xEnd - (leftX + 310)), height: fieldH });
 
-  drawSafe("Notizen / Prüfvermerk:", { x: leftX + 8, y: y - 48, size: 7.5, font: fontBold, color: cGray });
+  // Zeile 2: Notizen
+  drawSafe("Notizen / Prüfvermerk:", { x: leftX + 8, y: y - 56, size: 7.5, font: fontBold, color: cGray });
   const tfVorstandNotizen = form.createTextField('vorstand_notizen');
   tfVorstandNotizen.setText('');
-  tfVorstandNotizen.addToPage(page, { x: leftX + 115, y: y - 52, width: 365, height: 16 });
+  tfVorstandNotizen.addToPage(page, { x: xStart, y: y - 61, width: (xEnd - xStart), height: fieldH });
   y -= (k2H + 8);
 
   // --- KASTEN 3: KASSENWART (AcroForms) ---
-  const k3H = 62;
+  const k3H = 74; // Vergrößert für mehr Platz
   page.drawRectangle({ x: leftX, y: y - k3H, width: contentWidth, height: k3H, color: rgb(0.941, 0.992, 0.957), borderColor: rgb(0.086, 0.639, 0.290), borderWidth: 0.75 });
-  drawSafe("3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts", { x: leftX + 8, y: y - 12, size: 8.5, font: fontBold, color: cDark });
+  drawSafe("3. Zahlungsanweisung & Ausführungsvermerk des Kassenwarts", { x: leftX + 8, y: y - 13, size: 8.5, font: fontBold, color: cDark });
 
-  drawSafe("Angewiesener Betrag:", { x: leftX + 8, y: y - 28, size: 7.5, font: fontRegular, color: cDark });
+  // Zeile 1: Betrag, Überwiesen am, Visum
+  drawSafe("Angewiesener Betrag:", { x: leftX + 8, y: y - 31, size: 7.5, font: fontRegular, color: cDark });
   const tfKwBetrag = form.createTextField('kassenwart_betrag');
   tfKwBetrag.setText('');
-  tfKwBetrag.addToPage(page, { x: leftX + 110, y: y - 32, width: 65, height: 16 });
-  drawSafe("€", { x: leftX + 180, y: y - 28, size: 8, font: fontRegular, color: cDark });
+  tfKwBetrag.addToPage(page, { x: xStart, y: y - 36, width: 55, height: fieldH });
+  drawSafe("€", { x: leftX + 174, y: y - 31, size: 8, font: fontRegular, color: cDark });
 
-  drawSafe("Überwiesen am:", { x: leftX + 215, y: y - 28, size: 7.5, font: fontRegular, color: cDark });
+  drawSafe("Überwiesen am:", { x: leftX + 192, y: y - 31, size: 7.5, font: fontRegular, color: cDark });
   const tfKwDatum = form.createTextField('kassenwart_datum');
   tfKwDatum.setText('');
-  tfKwDatum.addToPage(page, { x: leftX + 285, y: y - 32, width: 75, height: 16 });
+  tfKwDatum.addToPage(page, { x: leftX + 265, y: y - 36, width: 80, height: fieldH });
 
-  drawSafe("Kassenwart / Visum:", { x: leftX + 375, y: y - 28, size: 7, font: fontBold, color: cGray });
+  drawSafe("Kassenwart / Visum:", { x: leftX + 355, y: y - 31, size: 7, font: fontBold, color: cGray });
   const tfKwSignatur = form.createTextField('kassenwart_signatur');
   tfKwSignatur.setText('');
-  tfKwSignatur.addToPage(page, { x: leftX + 450, y: y - 32, width: 65, height: 16 });
+  tfKwSignatur.addToPage(page, { x: leftX + 445, y: y - 36, width: (xEnd - (leftX + 445)), height: fieldH });
 
-  drawSafe("Notizen / Buchungsvermerk:", { x: leftX + 8, y: y - 50, size: 7.5, font: fontBold, color: cGray });
+  // Zeile 2: Notizen
+  drawSafe("Notizen / Buchungsvermerk:", { x: leftX + 8, y: y - 56, size: 7.5, font: fontBold, color: cGray });
   const tfKwNotizen = form.createTextField('kassenwart_notizen');
   tfKwNotizen.setText('');
-  tfKwNotizen.addToPage(page, { x: leftX + 130, y: y - 54, width: 350, height: 16 });
+  tfKwNotizen.addToPage(page, { x: xStart, y: y - 61, width: (xEnd - xStart), height: fieldH });
 
   // --- BELEGE ANHÄNGEN (BILDER & PDFS) ---
   let belegNr = 1;

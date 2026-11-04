@@ -337,6 +337,19 @@
           </div>
         </div>
 
+        <!-- 4. Digitale Unterschrift -->
+        <div class="p-3 bg-slate-50 border border-slate-200 rounded-lg mt-3 flex items-center justify-between">
+          <div class="min-w-0 pr-2">
+            <span class="text-[10px] font-bold text-slate-400 tracking-wider block">DIGITALE UNTERSCHRIFT</span>
+            <span id="lblSigStatus" class="text-xs font-semibold text-slate-600 flex items-center gap-1.5 mt-0.5 truncate">
+              <span>✍️</span> Noch keine Unterschrift
+            </span>
+          </div>
+          <button type="button" id="btnOpenSignature" class="flex-shrink-0 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold py-1.5 px-3 rounded-lg transition flex items-center gap-1">
+            <span>✍️</span> <span id="lblBtnOpenSignature">Unterschreiben</span>
+          </button>
+        </div>
+
         <!-- Großer Haupt-Button -->
         <button id="btnExportPdf" class="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg transition flex justify-center items-center gap-2 text-sm md:text-base">
           <span>📄</span> Abrechnung prüfen & PDF exportieren
@@ -346,6 +359,56 @@
     </section>
 
   </main>
+
+  <!-- MODAL: DIGITALE UNTERSCHRIFT -->
+  <div id="modalUnterschrift" class="hidden fixed inset-0 bg-slate-900 bg-opacity-70 z-50 flex justify-center items-center p-3 md:p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-5 md:p-6 shadow-2xl space-y-4 animate-fade-in">
+      <div class="flex justify-between items-start pb-2 border-b border-slate-100">
+        <div>
+          <h3 class="text-base md:text-lg font-bold text-slate-900 flex items-center gap-2">
+            <span>✍️</span> Digitale Eigenerklärung
+          </h3>
+          <p class="text-xs text-slate-500 mt-0.5">
+            Unterschrift des Antragstellers / Kursleiters für die Abrechnung
+          </p>
+        </div>
+        <button type="button" onclick="schliesseUnterschriftsModal()" class="text-slate-400 hover:text-slate-600 text-xl font-bold p-1 leading-none">✕</button>
+      </div>
+
+      <div class="space-y-2">
+        <p class="text-xs text-slate-600">
+          Bitte unterschreibe mit dem Finger, Stift oder der Maus im Kasten:
+        </p>
+
+        <!-- Canvas Fläche -->
+        <div class="relative bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl overflow-hidden touch-none" style="touch-action: none;">
+          <canvas id="sigCanvas" class="w-full h-44 bg-white block cursor-crosshair"></canvas>
+          <div id="sigPlaceholder" class="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-300 text-xs md:text-sm italic select-none">
+            Hier mit dem Finger oder Stift unterschreiben ✍️
+          </div>
+        </div>
+
+        <div class="flex justify-between items-center text-xs pt-1">
+          <button type="button" id="btnSigClear" class="text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 py-1 px-2 rounded hover:bg-rose-50 transition">
+            <span>🗑️</span> Neu zeichnen
+          </button>
+          <label class="flex items-center gap-1.5 text-slate-600 cursor-pointer select-none">
+            <input type="checkbox" id="chkSigMerken" checked class="rounded text-teal-600 focus:ring-teal-500">
+            <span>Auf diesem Gerät merken</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="space-y-2 pt-2 border-t border-slate-100">
+        <button type="button" id="btnSigUebernehmen" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-4 rounded-xl shadow transition flex justify-center items-center gap-2 text-sm">
+          <span>✅</span> Unterschrift übernehmen & PDF erstellen
+        </button>
+        <button type="button" id="btnSigOhne" class="w-full text-slate-400 hover:text-slate-600 text-xs py-1.5 transition text-center">
+          Ohne Signatur fortfahren (für manuellen Papierausdruck)
+        </button>
+      </div>
+    </div>
+  </div>
 
 
   <!-- ERFOLGS-MODAL / EINREICHEN & TEILEN -->
