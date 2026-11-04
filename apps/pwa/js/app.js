@@ -44,9 +44,96 @@ const AppState = {
   aktuelleDatei: null // { name, type, data (Uint8Array) }
 };
 
+// --- INDEXEDDB: DAUERHAFTE DATEI-SPEICHERUNG FÜR BELEGE (PDFs & FOTOS) ---
+const IDB_NAME = 'fv_abrechnung_belege_db';
+const IDB_VERSION = 1;
+const IDB_STORE = 'beleg_dateien';
+
+function getIndexedDB() {
+  return new Promise((resolve) => {
+    if (!window.indexedDB) {
+      resolve(null);
+      return;
+    }
+    const req = window.indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => {
+      console.warn("IndexedDB Fehler:", req.error);
+      resolve(null);
+    };
+  });
+}
+
+async function speichereBelegDateiInDB(id, fileObj) {
+  if (!id || !fileObj || !fileObj.data) return;
+  try {
+    const db = await getIndexedDB();
+    if (!db) return;
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put({
+      id: id,
+      name: fileObj.name,
+      type: fileObj.type,
+      data: fileObj.data
+    });
+    await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
+  } catch (err) {
+    console.warn("Konnte Belegdatei nicht in IndexedDB speichern:", err);
+  }
+}
+
+async function ladeBelegDateiAusDB(id) {
+  if (!id) return null;
+  try {
+    const db = await getIndexedDB();
+    if (!db) return null;
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(id);
+    const res = await new Promise((resolve) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+    return res ? { name: res.name, type: res.type, data: res.data } : null;
+  } catch (err) {
+    console.warn("Konnte Belegdatei nicht aus IndexedDB laden:", err);
+    return null;
+  }
+}
+
+async function loescheBelegDateiAusDB(id) {
+  if (!id) return;
+  try {
+    const db = await getIndexedDB();
+    if (!db) return;
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(id);
+    await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
+  } catch (err) {
+    console.warn("Konnte Belegdatei nicht aus IndexedDB löschen:", err);
+  }
+}
+
+async function leereAlleBelegDateienInDB() {
+  try {
+    const db = await getIndexedDB();
+    if (!db) return;
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).clear();
+    await new Promise((resolve) => { tx.oncomplete = resolve; tx.onerror = resolve; });
+  } catch (err) {
+    console.warn("Konnte IndexedDB nicht leeren:", err);
+  }
+}
+
 // Initialisierung beim Laden
-document.addEventListener('DOMContentLoaded', () => {
-  ladeLokaleDaten();
+document.addEventListener('DOMContentLoaded', async () => {
+  await ladeLokaleDaten();
   initEventListeners();
   renderUI();
   updateLiveUebersicht();
@@ -62,8 +149,8 @@ function registriereServiceWorker() {
   }
 }
 
-// Lokale Daten aus localStorage laden
-function ladeLokaleDaten() {
+// Lokale Daten aus localStorage & IndexedDB laden
+async function ladeLokaleDaten() {
   try {
     const sModus = localStorage.getItem('fv_modus');
     if (sModus === 'besorgung' || sModus === 'kurs') {
@@ -94,6 +181,19 @@ function ladeLokaleDaten() {
     const sBelege = localStorage.getItem('fv_belege');
     if (sBelege) {
       AppState.belege = JSON.parse(sBelege) || [];
+      // Dateien asynchron aus IndexedDB laden
+      for (const b of AppState.belege) {
+        if (!b.id) {
+          b.id = 'bel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        }
+        if (b.dateiName && !b.dateiData) {
+          const fileObj = await ladeBelegDateiAusDB(b.id);
+          if (fileObj && fileObj.data) {
+            b.dateiData = fileObj.data;
+            b.dateiType = fileObj.type || b.dateiType;
+          }
+        }
+      }
     }
 
     const sSig = localStorage.getItem('fv_abrechnung_unterschrift');
@@ -115,6 +215,7 @@ function autosave() {
     localStorage.setItem('fv_aktuelle_besorgung', JSON.stringify(AppState.besorgung));
 
     const belegeMetadaten = AppState.belege.map(b => ({
+      id: b.id || ('bel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7)),
       datum: b.datum,
       zweck: b.zweck,
       betrag: b.betrag,
@@ -300,21 +401,87 @@ function initEventListeners() {
     const file = e.target.files[0];
     if (!file) return;
 
-    const arrayBuffer = await file.arrayBuffer();
-    AppState.aktuelleDatei = {
-      name: file.name,
-      type: file.type,
-      data: new Uint8Array(arrayBuffer)
-    };
-    document.getElementById('lblGewaehlteDatei').textContent = `📎 Gewählt: ${file.name}`;
-    document.getElementById('lblGewaehlteDatei').classList.add('text-teal-700', 'font-medium');
+    const lbl = document.getElementById('lblGewaehlteDatei');
+    lbl.textContent = `⏳ Verarbeite ${file.name}...`;
+
+    try {
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        const arrayBuffer = await file.arrayBuffer();
+        AppState.aktuelleDatei = {
+          name: file.name,
+          type: 'application/pdf',
+          data: new Uint8Array(arrayBuffer)
+        };
+      } else {
+        // Foto / Bild (JPG, PNG, WebP, HEIC, etc.):
+        // Über HTML5 Canvas in ein standardisiertes, kompaktes JPEG wandeln
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
+
+        // Auf maximal 1600px skalieren (ideal für Dokumente & Lesbarkeit, verhindert 15MB Riesen-Uploads)
+        const maxDim = 1600;
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+
+        const jpegBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+        const jpegBuf = await jpegBlob.arrayBuffer();
+
+        const cleanName = file.name.replace(/\.[^/.]+$/, "") + ".jpg";
+        AppState.aktuelleDatei = {
+          name: cleanName,
+          type: 'image/jpeg',
+          data: new Uint8Array(jpegBuf)
+        };
+      }
+
+      lbl.textContent = `📎 Bereit: ${AppState.aktuelleDatei.name}`;
+      lbl.classList.add('text-teal-700', 'font-medium');
+    } catch (err) {
+      console.warn("Fehler bei Belegverarbeitung:", err);
+      const arrayBuffer = await file.arrayBuffer();
+      AppState.aktuelleDatei = {
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        data: new Uint8Array(arrayBuffer)
+      };
+      lbl.textContent = `📎 Bereit: ${file.name}`;
+      lbl.classList.add('text-teal-700', 'font-medium');
+    }
   });
 
   // Beleg Hinzufügen Button
   document.getElementById('btnAddBeleg').addEventListener('click', addBeleg);
 
   // Neuer Vorgang Button
-  document.getElementById('btnNeuerKurs').addEventListener('click', () => {
+  document.getElementById('btnNeuerKurs').addEventListener('click', async () => {
     const promptText = (AppState.modus === 'besorgung')
       ? "Möchtest du wirklich eine neue Besorgung / Veranstaltung erfassen?\n\n• Anlass- und Belegdaten werden geleert.\n• Personendaten (Name, IBAN) bleiben erhalten."
       : "Möchtest du wirklich einen neuen Kurs abrechnen?\n\n• Kursdaten und Belege werden geleert.\n• Personendaten (Name, IBAN, Stundensatz) bleiben erhalten.";
@@ -325,6 +492,7 @@ function initEventListeners() {
       } else {
         AppState.kurs = { id: "", titel: "", ag: "", datum: "", dauer: "2.0", ist_mehrtaegig: false, termine_anzahl: "1", end_datum: "", notizen: "" };
       }
+      await leereAlleBelegDateienInDB();
       AppState.belege = [];
       autosave();
       renderUI();
@@ -346,7 +514,7 @@ function initEventListeners() {
 }
 
 // Beleg hinzufügen
-function addBeleg() {
+async function addBeleg() {
   const dStr = document.getElementById('inBelegDatum').value.trim();
   const zweck = document.getElementById('inBelegZweck').value.trim();
   const bStr = document.getElementById('inBelegBetrag').value.trim();
@@ -389,14 +557,23 @@ function addBeleg() {
     }
   }
 
-  AppState.belege.push({
+  const belegId = 'bel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  const neuerBeleg = {
+    id: belegId,
     datum: formatDateGerman(dParsed),
     zweck: zweck,
     betrag: betrag,
     dateiName: AppState.aktuelleDatei ? AppState.aktuelleDatei.name : null,
     dateiType: AppState.aktuelleDatei ? AppState.aktuelleDatei.type : null,
     dateiData: AppState.aktuelleDatei ? AppState.aktuelleDatei.data : null
-  });
+  };
+
+  AppState.belege.push(neuerBeleg);
+
+  // Dauerhaft in IndexedDB ablegen (überlebt jeden Reload)
+  if (AppState.aktuelleDatei) {
+    await speichereBelegDateiInDB(belegId, AppState.aktuelleDatei);
+  }
 
   // Inputs leeren
   document.getElementById('inBelegDatum').value = "";
@@ -425,7 +602,16 @@ function renderBelegeListe() {
   AppState.belege.forEach((b, idx) => {
     const row = document.createElement('div');
     row.className = "flex justify-between items-center p-2.5 bg-slate-100 rounded-lg border border-slate-200 text-xs";
-    const fileBadge = b.dateiName ? `<span class="text-teal-700 ml-1 font-semibold">📎 ${b.dateiName.slice(0, 16)}</span>` : "";
+    
+    let fileBadge = "";
+    if (b.dateiName) {
+      if (b.dateiData) {
+        fileBadge = `<span class="text-teal-700 ml-1 font-semibold" title="Datei dauerhaft gespeichert">📎 ${b.dateiName.slice(0, 16)}</span>`;
+      } else {
+        fileBadge = `<span class="text-amber-600 ml-1 font-bold" title="Datei fehlt – bitte neu anhängen">⚠️ ${b.dateiName.slice(0, 14)} (Datei fehlt)</span>`;
+      }
+    }
+
     row.innerHTML = `
       <div class="truncate mr-2">
         <span class="font-bold text-slate-800">#${idx + 1}</span>
@@ -440,7 +626,11 @@ function renderBelegeListe() {
   });
 }
 
-window.loescheBeleg = function(idx) {
+window.loescheBeleg = async function(idx) {
+  const b = AppState.belege[idx];
+  if (b && b.id) {
+    await loescheBelegDateiAusDB(b.id);
+  }
   AppState.belege.splice(idx, 1);
   autosave();
   renderBelegeListe();
@@ -679,6 +869,20 @@ async function starteExportProzess() {
     const vorstandWarn = warns.find(w => w.level === "vorstand");
     if (vorstandWarn) {
       if (!confirm(`⚠️ ${vorstandWarn.titel}:\n\n${vorstandWarn.nachricht}\n\nMöchtest du die Abrechnung zur Genehmigung beim Vorstand einreichen?`)) {
+        return;
+      }
+    }
+  }
+
+  // Prüfung: Sind bei allen Belegen mit Dateinamen auch die Dateien vorhanden?
+  for (let i = 0; i < AppState.belege.length; i++) {
+    const b = AppState.belege[i];
+    if (b.dateiName && !b.dateiData) {
+      const nachgeladen = await ladeBelegDateiAusDB(b.id);
+      if (nachgeladen && nachgeladen.data) {
+        b.dateiData = nachgeladen.data;
+      } else {
+        alert(`⚠️ Datei-Fehler bei Beleg #${i + 1} (${b.zweck}):\n\nFür diesen Beleg ist ein Anhang ("${b.dateiName}") vermerkt, die Datei befindet sich jedoch nicht im Speicher.\n\nBitte lösche diesen Beleg kurz mit [X] und füge ihn mit Datei neu hinzu, damit er an die PDF angehängt werden kann.`);
         return;
       }
     }
