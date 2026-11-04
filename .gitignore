@@ -7,6 +7,8 @@ cache/
 Exportierte Rechnungen/
 data/
 *.json
+!apps/pwa/manifest.json
+!docs/manifest.json
 *.pdf
 
 # PyInstaller Build-Ordner

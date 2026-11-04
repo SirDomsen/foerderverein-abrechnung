@@ -1,0 +1,16 @@
+{
+  "name": "Förderverein Grundschule – Abrechnungs-Manager",
+  "short_name": "Abrechnung",
+  "description": "Abrechnung für Kursleiter des Fördervereins Grundschule",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1e3d59",
+  "theme_color": "#1e3d59",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
