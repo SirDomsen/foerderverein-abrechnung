@@ -21,7 +21,8 @@ const AppState = {
     dauer: "2.0",
     ist_mehrtaegig: false,
     termine_anzahl: "1",
-    end_datum: ""
+    end_datum: "",
+    notizen: ""
   },
   belege: [],
   settings: {
@@ -116,6 +117,7 @@ function renderUI() {
   document.getElementById('inTermineAnzahl').value = AppState.kurs.termine_anzahl || "1";
   document.getElementById('inKursEndDatum').value = AppState.kurs.end_datum || "";
   document.getElementById('inKursDauer').value = AppState.kurs.dauer || "2.0";
+  document.getElementById('inKursNotizen').value = AppState.kurs.notizen || "";
 
   renderBelegeListe();
 }
@@ -142,11 +144,12 @@ function initEventListeners() {
   });
 
   // Kursdaten Input
-  ['inKursId', 'inKursAg', 'inKursDatum', 'inTermineAnzahl', 'inKursEndDatum', 'inKursDauer'].forEach(id => {
+  ['inKursId', 'inKursAg', 'inKursDatum', 'inTermineAnzahl', 'inKursEndDatum', 'inKursDauer', 'inKursNotizen'].forEach(id => {
     document.getElementById(id).addEventListener('input', (e) => {
       let prop = id.replace('inKurs', '').toLowerCase();
       if (id === 'inTermineAnzahl') prop = 'termine_anzahl';
       if (id === 'inKursEndDatum') prop = 'end_datum';
+      if (id === 'inKursNotizen') prop = 'notizen';
       AppState.kurs[prop] = e.target.value;
       autosave();
       updateLiveUebersicht();
@@ -207,7 +210,7 @@ function initEventListeners() {
   // Neuer Kurs Button
   document.getElementById('btnNeuerKurs').addEventListener('click', () => {
     if (confirm("Möchtest du wirklich einen neuen Kurs abrechnen?\n\n• Kursdaten und Belege werden geleert.\n• Personendaten (Name, IBAN, Stundensatz) bleiben erhalten.")) {
-      AppState.kurs = { id: "", titel: "", ag: "", datum: "", dauer: "2.0", ist_mehrtaegig: false, termine_anzahl: "1", end_datum: "" };
+      AppState.kurs = { id: "", titel: "", ag: "", datum: "", dauer: "2.0", ist_mehrtaegig: false, termine_anzahl: "1", end_datum: "", notizen: "" };
       AppState.belege = [];
       autosave();
       renderUI();
@@ -381,7 +384,11 @@ function updateLiveUebersicht() {
   }
 
   // Zahlen
-  document.getElementById('sumHonorarDetail').textContent = `${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h`;
+  if (summen.vorbereitungDauer > 0) {
+    document.getElementById('sumHonorarDetail').textContent = `${summen.unterrichtDauer.toFixed(2)}h Unterricht + ${summen.vorbereitungDauer.toFixed(2)}h Vorbereitung (${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h)`;
+  } else {
+    document.getElementById('sumHonorarDetail').textContent = `${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h`;
+  }
   document.getElementById('sumHonorarBetrag').textContent = `${summen.honorar.toFixed(2)} €`;
   document.getElementById('sumAuslagenDetail').textContent = `Materialauslagen (${AppState.belege.length} Belege)`;
   document.getElementById('sumAuslagenBetrag').textContent = `${summen.auslagen.toFixed(2)} €`;

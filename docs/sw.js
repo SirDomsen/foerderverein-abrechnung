@@ -1,5 +1,5 @@
 // Service Worker für 100% Offline-Fähigkeit
-const CACHE_NAME = 'fv-abrechnung-v1.0.2';
+const CACHE_NAME = 'fv-abrechnung-v1.0.3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

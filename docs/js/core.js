@@ -6,6 +6,7 @@
 const DEFAULT_STUNDENSATZ = 21.00;
 const DEFAULT_ADMIN_PIN = "4711";
 const VEREIN_EMAIL = "foerderverein.riedlen-gs@gmx.de";
+const VORBEREITUNG_STUNDEN = 0.50;
 
 // Lückenlose BW-Ferienliste 2024–2028 (offline sofort verfügbar)
 const BW_FERIEN = [
@@ -350,11 +351,25 @@ function pruefeBelegPlausibilitaet(belegDatum, kursDatum) {
 
 // Summen berechnen
 function berechneSummen(dauerVal, satzVal, belege) {
-  const dauer = parseFloat(String(dauerVal).replace(',', '.')) || 0.0;
+  const unterrichtDauer = parseFloat(String(dauerVal).replace(',', '.')) || 0.0;
+  const vorbereitungDauer = unterrichtDauer > 0 ? VORBEREITUNG_STUNDEN : 0.0;
+  const dauer = unterrichtDauer + vorbereitungDauer;
   const satz = parseFloat(String(satzVal).replace(',', '.')) || 0.0;
+  const unterrichtHonorar = unterrichtDauer * satz;
+  const vorbereitungHonorar = vorbereitungDauer * satz;
   const honorar = dauer * satz;
   const auslagen = (belege || []).reduce((acc, b) => acc + (parseFloat(b.betrag) || 0.0), 0.0);
   const gesamt = honorar + auslagen;
 
-  return { dauer, satz, honorar, auslagen, gesamt };
+  return {
+    unterrichtDauer,
+    vorbereitungDauer,
+    dauer,
+    satz,
+    unterrichtHonorar,
+    vorbereitungHonorar,
+    honorar,
+    auslagen,
+    gesamt
+  };
 }

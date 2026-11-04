@@ -158,14 +158,37 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege) {
   drawSafe("Honoraranspruch", { x: rightX - 85, y: y - 11, size: 8, font: fontBold, color: cDark });
 
   y -= 16;
-  // Tabellen-Zeile
-  page.drawRectangle({ x: leftX, y: y - 18, width: tblW, height: 18, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
-  drawSafe(startD, { x: leftX + 6, y: y - 12, size: 8, font: fontRegular, color: cDark });
-  drawSafe(`${kurs.titel || '–'} (${kurs.ag || '–'})`.slice(0, 50), { x: leftX + 85, y: y - 12, size: 8, font: fontRegular, color: cDark });
-  drawSafe(`${summen.dauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 12, size: 8, font: fontRegular, color: cDark });
-  drawSafe(`${summen.honorar.toFixed(2)} €`, { x: rightX - 65, y: y - 12, size: 8, font: fontBold, color: cDark });
+  if (summen.vorbereitungDauer > 0) {
+    // Zeile 1: Unterricht
+    page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
+    drawSafe(startD, { x: leftX + 6, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe(`${kurs.titel || '–'} (${kurs.ag || '–'}) [Durchführung]`.slice(0, 48), { x: leftX + 85, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe(`${summen.unterrichtDauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe(`${summen.unterrichtHonorar.toFixed(2)} €`, { x: rightX - 65, y: y - 11, size: 7.5, font: fontBold, color: cDark });
+    y -= 16;
 
-  y -= 28;
+    // Zeile 2: Vorbereitungspauschale
+    page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: rgb(0.973, 0.980, 0.988), borderColor: cBorder, borderWidth: 0.5 });
+    drawSafe("–", { x: leftX + 6, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe("Vorbereitungs- & Rüstzeitpauschale (Vereinsbeschluss)", { x: leftX + 85, y: y - 11, size: 7.5, font: fontItalic, color: cDark });
+    drawSafe(`${summen.vorbereitungDauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    drawSafe(`${summen.vorbereitungHonorar.toFixed(2)} €`, { x: rightX - 65, y: y - 11, size: 7.5, font: fontRegular, color: cDark });
+    y -= 16;
+
+    // Zeile 3: Summe Honorar
+    page.drawRectangle({ x: leftX, y: y - 16, width: tblW, height: 16, color: cBgHell, borderColor: cBorder, borderWidth: 0.5 });
+    drawSafe("Honoraranspruch Gesamt (inkl. Vorbereitung):", { x: leftX + 6, y: y - 11, size: 7.5, font: fontBold, color: cDark });
+    drawSafe(`${summen.dauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 11, size: 7.5, font: fontBold, color: cDark });
+    drawSafe(`${summen.honorar.toFixed(2)} €`, { x: rightX - 65, y: y - 11, size: 7.5, font: fontBold, color: cDark });
+    y -= 22;
+  } else {
+    page.drawRectangle({ x: leftX, y: y - 18, width: tblW, height: 18, color: rgb(1, 1, 1), borderColor: cBorder, borderWidth: 0.5 });
+    drawSafe(startD, { x: leftX + 6, y: y - 12, size: 8, font: fontRegular, color: cDark });
+    drawSafe(`${kurs.titel || '–'} (${kurs.ag || '–'})`.slice(0, 50), { x: leftX + 85, y: y - 12, size: 8, font: fontRegular, color: cDark });
+    drawSafe(`${summen.dauer.toFixed(2)} Std.`, { x: leftX + 355, y: y - 12, size: 8, font: fontRegular, color: cDark });
+    drawSafe(`${summen.honorar.toFixed(2)} €`, { x: rightX - 65, y: y - 12, size: 8, font: fontBold, color: cDark });
+    y -= 28;
+  }
 
   // --- 2. MATERIALAUSLAGEN ---
   drawSafe("2. Auslagen für Kursmaterialien", { x: leftX, y, size: 10, font: fontBold, color: cPrim });
@@ -230,14 +253,23 @@ async function erzeugeAbrechnungPDF(stamm, kurs, belege) {
   const form = pdfDoc.getForm();
 
   // --- KASTEN 1: KURSLEITER ---
-  const k1H = 50;
+  const hatNotiz = Boolean(kurs.notizen && kurs.notizen.trim());
+  const k1H = hatNotiz ? 58 : 50;
   page.drawRectangle({ x: leftX, y: y - k1H, width: contentWidth, height: k1H, color: cBgHell, borderColor: rgb(0.58, 0.64, 0.72), borderWidth: 0.65 });
   drawSafe("1. Kursleiter / Auftragnehmer (Eigenerklärung & Unterschrift)", { x: leftX + 8, y: y - 11, size: 8, font: fontBold, color: cDark });
   const steuerText = "Ich versichere, dass die Leistungen ordnungsgemäß erbracht wurden und im Rahmen des Ehrenamts- bzw. Übungsleiterfreibetrags (§ 3 Nr. 26/26a EStG) erfolgen. Freibeträge werden nicht überschritten.";
-  drawSafe(steuerText, { x: leftX + 8, y: y - 22, size: 6.2, font: fontRegular, color: cGray });
-  drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - 38, size: 8, font: fontRegular, color: cDark });
-  page.drawLine({ start: { x: rightX - 180, y: y - 36 }, end: { x: rightX - 10, y: y - 36 }, thickness: 0.5, color: cGray });
-  drawSafe("Unterschrift des Kursleiters", { x: rightX - 145, y: y - 44, size: 6.5, font: fontRegular, color: cGray });
+  drawSafe(steuerText, { x: leftX + 8, y: y - 21, size: 6.2, font: fontRegular, color: cGray });
+
+  if (hatNotiz) {
+    drawSafe(`Bemerkung des Kursleiters: ${kurs.notizen.trim()}`.slice(0, 95), { x: leftX + 8, y: y - 31, size: 6.8, font: fontItalic, color: cPrim });
+    drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - 46, size: 7.5, font: fontRegular, color: cDark });
+    page.drawLine({ start: { x: rightX - 180, y: y - 44 }, end: { x: rightX - 10, y: y - 44 }, thickness: 0.5, color: cGray });
+    drawSafe("Unterschrift des Kursleiters", { x: rightX - 145, y: y - 52, size: 6.5, font: fontRegular, color: cGray });
+  } else {
+    drawSafe(`Ort & Datum: Ulm, den ${heuteStr}`, { x: leftX + 8, y: y - 38, size: 8, font: fontRegular, color: cDark });
+    page.drawLine({ start: { x: rightX - 180, y: y - 36 }, end: { x: rightX - 10, y: y - 36 }, thickness: 0.5, color: cGray });
+    drawSafe("Unterschrift des Kursleiters", { x: rightX - 145, y: y - 44, size: 6.5, font: fontRegular, color: cGray });
+  }
   y -= (k1H + 6);
 
   // --- KASTEN 2: VORSTAND (AcroForms) ---

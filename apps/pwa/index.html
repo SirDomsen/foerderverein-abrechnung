@@ -131,8 +131,16 @@
           </div>
 
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1">Gesamtdauer in Stunden (z. B. 2.0 oder 8.0):</label>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Gesamtdauer Unterricht in Stunden (z. B. 2.0 oder 8.0):</label>
             <input type="text" id="inKursDauer" placeholder="2.0" class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d97706]">
+            <p class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-1.5 flex items-center gap-1.5 font-medium">
+              <span>ℹ️</span> <span>Gemäß Vereinsbeschluss wird automatisch eine einmalige Vorbereitungspauschale von <strong>+0,50 Std.</strong> hinzugerechnet.</span>
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Notizen / Bemerkungen des Kursleiters (optional):</label>
+            <textarea id="inKursNotizen" rows="2" placeholder="z. B. Besonderheiten, Vertretung, Projektinhalte, Raumänderung..." class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d97706]"></textarea>
           </div>
         </div>
       </div>
