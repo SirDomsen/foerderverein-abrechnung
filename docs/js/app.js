@@ -1,11 +1,15 @@
 /**
  * app.js - UI-Controller & State-Management der PWA
+ * Unterstützt 2 Modi:
+ *  1. 'kurs': Abrechnung Kursleitung / AG (Honorar + Materialauslagen)
+ *  2. 'besorgung': Reine Auslagenerstattung (Schuljahr-Abrechnung ohne Honorar)
  * Lokale Speicherung in localStorage, reaktive Live-Übersicht,
  * Kamera-Upload und native Teilen- / Mail-Funktion.
  */
 
 // Globaler Zustand
 const AppState = {
+  modus: "kurs", // "kurs" oder "besorgung"
   stamm: {
     leiter: "",
     anschrift: "",
@@ -22,6 +26,13 @@ const AppState = {
     ist_mehrtaegig: false,
     termine_anzahl: "1",
     end_datum: "",
+    notizen: ""
+  },
+  besorgung: {
+    id: "",
+    anlass: "",
+    zweck: "",
+    datum: "",
     notizen: ""
   },
   belege: [],
@@ -53,6 +64,11 @@ function registriereServiceWorker() {
 // Lokale Daten aus localStorage laden
 function ladeLokaleDaten() {
   try {
+    const sModus = localStorage.getItem('fv_modus');
+    if (sModus === 'besorgung' || sModus === 'kurs') {
+      AppState.modus = sModus;
+    }
+
     const sSettings = localStorage.getItem('fv_settings');
     if (sSettings) {
       AppState.settings = Object.assign(AppState.settings, JSON.parse(sSettings));
@@ -62,12 +78,16 @@ function ladeLokaleDaten() {
     if (sStamm) {
       AppState.stamm = Object.assign(AppState.stamm, JSON.parse(sStamm));
     }
-    // Stundensatz immer aus den geschützten Einstellungen synchronisieren
     AppState.stamm.satz = parseFloat(AppState.settings.stundensatz || DEFAULT_STUNDENSATZ).toFixed(2);
 
     const sKurs = localStorage.getItem('fv_aktueller_kurs');
     if (sKurs) {
       AppState.kurs = Object.assign(AppState.kurs, JSON.parse(sKurs));
+    }
+
+    const sBesorgung = localStorage.getItem('fv_aktuelle_besorgung');
+    if (sBesorgung) {
+      AppState.besorgung = Object.assign(AppState.besorgung, JSON.parse(sBesorgung));
     }
 
     const sBelege = localStorage.getItem('fv_belege');
@@ -82,10 +102,12 @@ function ladeLokaleDaten() {
 // Autosave
 function autosave() {
   try {
+    localStorage.setItem('fv_modus', AppState.modus);
     localStorage.setItem('fv_settings', JSON.stringify(AppState.settings));
     localStorage.setItem('fv_stammdaten', JSON.stringify(AppState.stamm));
     localStorage.setItem('fv_aktueller_kurs', JSON.stringify(AppState.kurs));
-    // Belege ohne die rohen Byte-Daten im localStorage puffern (für Entwurf)
+    localStorage.setItem('fv_aktuelle_besorgung', JSON.stringify(AppState.besorgung));
+
     const belegeMetadaten = AppState.belege.map(b => ({
       datum: b.datum,
       zweck: b.zweck,
@@ -99,14 +121,46 @@ function autosave() {
   }
 }
 
+// Modus umschalten (Tabs)
+function setzeModus(m) {
+  AppState.modus = m;
+  const tabKurs = document.getElementById('tabModusKurs');
+  const tabBesorgung = document.getElementById('tabModusBesorgung');
+  const boxKurs = document.getElementById('boxSectionKurs');
+  const boxBesorgung = document.getElementById('boxSectionBesorgung');
+  const lblPerson = document.getElementById('lblPersonName');
+  const sumHonorar = document.getElementById('sumBoxHonorar');
+
+  if (m === 'besorgung') {
+    tabBesorgung.className = "py-2.5 px-3 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-1.5 transition border-2 border-teal-700 bg-teal-700 text-white shadow-sm";
+    tabKurs.className = "py-2.5 px-3 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-1.5 transition border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100";
+    boxKurs.classList.add('hidden');
+    boxBesorgung.classList.remove('hidden');
+    lblPerson.textContent = "Name des Antragstellers / Erstatters:";
+    sumHonorar.classList.add('hidden');
+  } else {
+    tabKurs.className = "py-2.5 px-3 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-1.5 transition border-2 border-[#1e3d59] bg-[#1e3d59] text-white shadow-sm";
+    tabBesorgung.className = "py-2.5 px-3 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-1.5 transition border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100";
+    boxKurs.classList.remove('hidden');
+    boxBesorgung.classList.add('hidden');
+    lblPerson.textContent = "Name des Kursleiters / Auftragnehmers:";
+    sumHonorar.classList.remove('hidden');
+  }
+
+  autosave();
+  updateLiveUebersicht();
+}
+
 // Formularfelder mit Werten befüllen
 function renderUI() {
+  // Stammdaten
   document.getElementById('inLeiter').value = AppState.stamm.leiter || "";
   document.getElementById('inAnschrift').value = AppState.stamm.anschrift || "";
   document.getElementById('inTelefon').value = AppState.stamm.telefon || "";
   document.getElementById('inIban').value = AppState.stamm.iban || "";
   document.getElementById('lblStundensatz').textContent = `💰 ${parseFloat(AppState.stamm.satz || 21).toFixed(2)} € / Stunde`;
 
+  // Kursdaten
   document.getElementById('inKursId').value = AppState.kurs.id || "";
   document.getElementById('inKursTitel').value = AppState.kurs.titel || "";
   document.getElementById('inKursAg').value = AppState.kurs.ag || "";
@@ -118,6 +172,16 @@ function renderUI() {
   document.getElementById('inKursEndDatum').value = AppState.kurs.end_datum || "";
   document.getElementById('inKursDauer').value = AppState.kurs.dauer || "2.0";
   document.getElementById('inKursNotizen').value = AppState.kurs.notizen || "";
+
+  // Besorgungsdaten
+  document.getElementById('inBesorgungId').value = AppState.besorgung.id || "";
+  document.getElementById('inBesorgungAnlass').value = AppState.besorgung.anlass || "";
+  document.getElementById('inBesorgungZweck').value = AppState.besorgung.zweck || "";
+  document.getElementById('inBesorgungDatum').value = AppState.besorgung.datum || "";
+  document.getElementById('inBesorgungNotizen').value = AppState.besorgung.notizen || "";
+
+  // Modus setzen
+  setzeModus(AppState.modus || 'kurs');
 
   renderBelegeListe();
 }
@@ -133,6 +197,10 @@ function toggleMehrtaegigUI(isMehr) {
 
 // Event-Listener verdrahten
 function initEventListeners() {
+  // Tabs Modus
+  document.getElementById('tabModusKurs').addEventListener('click', () => setzeModus('kurs'));
+  document.getElementById('tabModusBesorgung').addEventListener('click', () => setzeModus('besorgung'));
+
   // Stammdaten Input
   ['inLeiter', 'inAnschrift', 'inTelefon', 'inIban'].forEach(id => {
     document.getElementById(id).addEventListener('input', (e) => {
@@ -168,7 +236,7 @@ function initEventListeners() {
     updateLiveUebersicht();
   });
 
-  // Mehrtaegig Checkbox
+  // Mehrtägig Checkbox
   document.getElementById('checkMehrtaegig').addEventListener('change', (e) => {
     AppState.kurs.ist_mehrtaegig = e.target.checked;
     toggleMehrtaegigUI(e.target.checked);
@@ -176,11 +244,42 @@ function initEventListeners() {
     updateLiveUebersicht();
   });
 
-  // ID Neu vorschlagen Button
+  // ID Neu vorschlagen Button (Kurs)
   document.getElementById('btnSuggestId').addEventListener('click', () => {
     const sugg = generiereKursIdVorschlag(AppState.kurs.titel, AppState.kurs.datum);
     AppState.kurs.id = sugg;
     document.getElementById('inKursId').value = sugg;
+    autosave();
+    updateLiveUebersicht();
+  });
+
+  // Besorgungsdaten Input
+  ['inBesorgungId', 'inBesorgungZweck', 'inBesorgungDatum', 'inBesorgungNotizen'].forEach(id => {
+    document.getElementById(id).addEventListener('input', (e) => {
+      const prop = id.replace('inBesorgung', '').toLowerCase();
+      AppState.besorgung[prop] = e.target.value;
+      autosave();
+      updateLiveUebersicht();
+    });
+  });
+
+  // Anlass mit Auto-Vorschlag für Besorgungs-ID
+  document.getElementById('inBesorgungAnlass').addEventListener('input', (e) => {
+    AppState.besorgung.anlass = e.target.value;
+    if (!AppState.besorgung.id && e.target.value.trim().length >= 3) {
+      const sugg = generiereBesorgungIdVorschlag(e.target.value, AppState.besorgung.datum);
+      AppState.besorgung.id = sugg;
+      document.getElementById('inBesorgungId').value = sugg;
+    }
+    autosave();
+    updateLiveUebersicht();
+  });
+
+  // ID Neu vorschlagen Button (Besorgung)
+  document.getElementById('btnSuggestBesorgungId').addEventListener('click', () => {
+    const sugg = generiereBesorgungIdVorschlag(AppState.besorgung.anlass, AppState.besorgung.datum);
+    AppState.besorgung.id = sugg;
+    document.getElementById('inBesorgungId').value = sugg;
     autosave();
     updateLiveUebersicht();
   });
@@ -207,10 +306,18 @@ function initEventListeners() {
   // Beleg Hinzufügen Button
   document.getElementById('btnAddBeleg').addEventListener('click', addBeleg);
 
-  // Neuer Kurs Button
+  // Neuer Vorgang Button
   document.getElementById('btnNeuerKurs').addEventListener('click', () => {
-    if (confirm("Möchtest du wirklich einen neuen Kurs abrechnen?\n\n• Kursdaten und Belege werden geleert.\n• Personendaten (Name, IBAN, Stundensatz) bleiben erhalten.")) {
-      AppState.kurs = { id: "", titel: "", ag: "", datum: "", dauer: "2.0", ist_mehrtaegig: false, termine_anzahl: "1", end_datum: "", notizen: "" };
+    const promptText = (AppState.modus === 'besorgung')
+      ? "Möchtest du wirklich eine neue Besorgung / Veranstaltung erfassen?\n\n• Anlass- und Belegdaten werden geleert.\n• Personendaten (Name, IBAN) bleiben erhalten."
+      : "Möchtest du wirklich einen neuen Kurs abrechnen?\n\n• Kursdaten und Belege werden geleert.\n• Personendaten (Name, IBAN, Stundensatz) bleiben erhalten.";
+
+    if (confirm(promptText)) {
+      if (AppState.modus === 'besorgung') {
+        AppState.besorgung = { id: "", anlass: "", zweck: "", datum: "", notizen: "" };
+      } else {
+        AppState.kurs = { id: "", titel: "", ag: "", datum: "", dauer: "2.0", ist_mehrtaegig: false, termine_anzahl: "1", end_datum: "", notizen: "" };
+      }
       AppState.belege = [];
       autosave();
       renderUI();
@@ -243,16 +350,26 @@ function addBeleg() {
     return;
   }
 
-  // Plausibilität
-  const kdParsed = parseGermanDate(AppState.kurs.datum);
-  const plausi = pruefeBelegPlausibilitaet(dParsed, kdParsed);
-  if (!plausi.ok) {
-    if (!confirm(`⚠️ Plausibilitätshinweis:\n\n${plausi.msg}\n\nMöchtest du den Beleg trotzdem übernehmen?`)) {
-      return;
+  // Plausibilität je nach Modus
+  if (AppState.modus === 'besorgung') {
+    const bDate = parseGermanDate(AppState.besorgung.datum);
+    const plausi = pruefeBesorgungBelegPlausibilitaet(dParsed, bDate);
+    if (!plausi.ok) {
+      if (!confirm(`⚠️ Plausibilitätshinweis:\n\n${plausi.msg}\n\nMöchtest du den Beleg trotzdem übernehmen?`)) {
+        return;
+      }
     }
-  } else if (plausi.status === 'vorlauf') {
-    if (!confirm(`ℹ️ Vorlauf-Einkauf:\n\n${plausi.msg}\n\nTrotzdem übernehmen?`)) {
-      return;
+  } else {
+    const kdParsed = parseGermanDate(AppState.kurs.datum);
+    const plausi = pruefeBelegPlausibilitaet(dParsed, kdParsed);
+    if (!plausi.ok) {
+      if (!confirm(`⚠️ Plausibilitätshinweis:\n\n${plausi.msg}\n\nMöchtest du den Beleg trotzdem übernehmen?`)) {
+        return;
+      }
+    } else if (plausi.status === 'vorlauf') {
+      if (!confirm(`ℹ️ Vorlauf-Einkauf:\n\n${plausi.msg}\n\nTrotzdem übernehmen?`)) {
+        return;
+      }
     }
   }
 
@@ -285,7 +402,7 @@ function renderBelegeListe() {
   container.innerHTML = "";
 
   if (AppState.belege.length === 0) {
-    container.innerHTML = '<p class="text-xs text-slate-400 italic">Noch keine Belege für diesen Kurs erfasst.</p>';
+    container.innerHTML = '<p class="text-xs text-slate-400 italic">Noch keine Belege erfasst.</p>';
     return;
   }
 
@@ -301,7 +418,7 @@ function renderBelegeListe() {
         <span class="font-bold text-slate-900 ml-1">(${parseFloat(b.betrag).toFixed(2)} €)</span>
         ${fileBadge}
       </div>
-      <button class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-xs transition" onclick="loescheBeleg(${idx})">X</button>
+      <button type="button" class="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-2 rounded text-xs transition" onclick="loescheBeleg(${idx})">X</button>
     `;
     container.appendChild(row);
   });
@@ -316,36 +433,69 @@ window.loescheBeleg = function(idx) {
 
 // Live-Übersicht berechnen und aktualisieren
 function updateLiveUebersicht() {
-  const summen = berechneSummen(AppState.kurs.dauer, AppState.stamm.satz, AppState.belege);
-
-  const istM = Boolean(AppState.kurs.ist_mehrtaegig);
-  const startD = AppState.kurs.datum || "–";
-  const endD = AppState.kurs.end_datum || "";
-  const anzT = AppState.kurs.termine_anzahl || "1";
-  const terminText = (istM && endD) ? `${startD} bis ${endD} (${anzT} Termine)` : startD;
-
-  const pruefDStr = (istM && endD) ? endD : AppState.kurs.datum;
-  const kdParsed = parseGermanDate(pruefDStr);
-
-  let periodeText = "–";
-  let warns = [];
-  if (kdParsed) {
-    const z = ermittleAbrechnungszeitraum(kdParsed);
-    periodeText = z.name;
-    warns = pruefeKursdatumPlausibilitaet(kdParsed);
-  }
+  const isBesorgung = (AppState.modus === 'besorgung');
+  const summen = isBesorgung
+    ? {
+        unterrichtDauer: 0,
+        vorbereitungDauer: 0,
+        dauer: 0,
+        satz: 0,
+        unterrichtHonorar: 0,
+        vorbereitungHonorar: 0,
+        honorar: 0,
+        auslagen: (AppState.belege || []).reduce((acc, b) => acc + (parseFloat(b.betrag) || 0.0), 0.0),
+        gesamt: (AppState.belege || []).reduce((acc, b) => acc + (parseFloat(b.betrag) || 0.0), 0.0)
+      }
+    : berechneSummen(AppState.kurs.dauer, AppState.stamm.satz, AppState.belege);
 
   const ibanVal = (AppState.stamm.iban || "").trim();
   const ibanCheck = validiereIBAN(ibanVal);
-
-  const kid = AppState.kurs.id || "Noch keine Kurs-ID";
-  const titel = AppState.kurs.titel || "Kein Kurstitel";
   const leiter = AppState.stamm.leiter || "Kein Name hinterlegt";
-  const festerName = generiereDateiname(AppState.kurs.datum, AppState.kurs.titel, leiter, AppState.kurs.id);
+
+  let titel, kid, terminText, periodeText, warns = [], festerName;
+
+  if (isBesorgung) {
+    titel = AppState.besorgung.anlass || "Keine Veranstaltung angegeben";
+    kid = AppState.besorgung.id || "Noch keine Referenz";
+    const bDateParsed = parseGermanDate(AppState.besorgung.datum);
+    terminText = bDateParsed ? formatDateGerman(bDateParsed) : "–";
+
+    if (bDateParsed) {
+      const bSj = ermittleSchuljahrDetails(bDateParsed);
+      periodeText = `Schuljahr ${bSj.code} (Laufendes Schuljahr)`;
+      warns = pruefeBesorgungDatumPlausibilitaet(bDateParsed);
+    } else {
+      periodeText = "Laufendes Schuljahr";
+    }
+
+    festerName = generiereDateiname(AppState.besorgung.datum, AppState.besorgung.anlass, leiter, AppState.besorgung.id, "besorgung");
+  } else {
+    // Modus Kurs
+    titel = AppState.kurs.titel || "Kein Kurstitel";
+    kid = AppState.kurs.id || "Noch keine Kurs-ID";
+
+    const istM = Boolean(AppState.kurs.ist_mehrtaegig);
+    const startD = AppState.kurs.datum || "–";
+    const endD = AppState.kurs.end_datum || "";
+    const anzT = AppState.kurs.termine_anzahl || "1";
+    terminText = (istM && endD) ? `${startD} bis ${endD} (${anzT} Termine)` : startD;
+
+    const pruefDStr = (istM && endD) ? endD : AppState.kurs.datum;
+    const kdParsed = parseGermanDate(pruefDStr);
+
+    periodeText = "–";
+    if (kdParsed) {
+      const z = ermittleAbrechnungszeitraum(kdParsed);
+      periodeText = z.name;
+      warns = pruefeKursdatumPlausibilitaet(kdParsed);
+    }
+
+    festerName = generiereDateiname(AppState.kurs.datum, AppState.kurs.titel, leiter, AppState.kurs.id, "kurs");
+  }
 
   // DOM updaten
   document.getElementById('sumTitel').textContent = titel;
-  document.getElementById('sumKursId').textContent = `ID: ${kid}`;
+  document.getElementById('sumKursId').textContent = isBesorgung ? `Ref: ${kid}` : `ID: ${kid}`;
   document.getElementById('sumLeiter').textContent = leiter;
 
   const sumIban = document.getElementById('sumIban');
@@ -379,17 +529,21 @@ function updateLiveUebersicht() {
       box.innerHTML = `<span>${icon}</span><span class="font-semibold">${w.titel}</span>`;
       warnContainer.appendChild(box);
     });
-  } else if (kdParsed) {
-    warnContainer.innerHTML = '<div class="p-1.5 bg-emerald-50 border border-emerald-200 rounded text-xs flex items-center gap-1 text-emerald-700 font-medium"><span>✓</span> Im regulären Abrechnungszeitraum</div>';
+  } else if ((isBesorgung && AppState.besorgung.datum) || (!isBesorgung && AppState.kurs.datum)) {
+    const textOk = isBesorgung ? "✓ Im laufenden Schuljahr zulässig" : "✓ Im regulären Abrechnungszeitraum";
+    warnContainer.innerHTML = `<div class="p-1.5 bg-emerald-50 border border-emerald-200 rounded text-xs flex items-center gap-1 text-emerald-700 font-medium"><span>✓</span> ${textOk}</div>`;
   }
 
   // Zahlen
-  if (summen.vorbereitungDauer > 0) {
-    document.getElementById('sumHonorarDetail').textContent = `${summen.unterrichtDauer.toFixed(2)}h Unterricht + ${summen.vorbereitungDauer.toFixed(2)}h Vorbereitung (${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h)`;
-  } else {
-    document.getElementById('sumHonorarDetail').textContent = `${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h`;
+  if (!isBesorgung) {
+    if (summen.vorbereitungDauer > 0) {
+      document.getElementById('sumHonorarDetail').textContent = `${summen.unterrichtDauer.toFixed(2)}h Unterricht + ${summen.vorbereitungDauer.toFixed(2)}h Vorbereitung (${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h)`;
+    } else {
+      document.getElementById('sumHonorarDetail').textContent = `${summen.dauer.toFixed(2)} Std. × ${summen.satz.toFixed(2)} €/h`;
+    }
+    document.getElementById('sumHonorarBetrag').textContent = `${summen.honorar.toFixed(2)} €`;
   }
-  document.getElementById('sumHonorarBetrag').textContent = `${summen.honorar.toFixed(2)} €`;
+
   document.getElementById('sumAuslagenDetail').textContent = `Materialauslagen (${AppState.belege.length} Belege)`;
   document.getElementById('sumAuslagenBetrag').textContent = `${summen.auslagen.toFixed(2)} €`;
   document.getElementById('sumGesamtBetrag').textContent = `${summen.gesamt.toFixed(2)} €`;
@@ -437,8 +591,10 @@ function oeffneAdminSettingsModal() {
 
 // PDF-Export & Senden
 async function starteExportProzess() {
+  const isBesorgung = (AppState.modus === 'besorgung');
+
   if (!AppState.stamm.leiter.trim()) {
-    alert("Bitte den Namen des Kursleiters angeben.");
+    alert(isBesorgung ? "Bitte den Namen des Antragstellers angeben." : "Bitte den Namen des Kursleiters angeben.");
     return;
   }
   if (!AppState.stamm.anschrift.trim()) {
@@ -450,34 +606,68 @@ async function starteExportProzess() {
     alert(`IBAN-Fehler:\n${iCheck.err}`);
     return;
   }
-  if (!AppState.kurs.id.trim()) {
-    alert("Bitte eine Kurs-ID angeben.");
-    return;
-  }
-  if (!AppState.kurs.titel.trim()) {
-    alert("Bitte den Kurstitel angeben.");
-    return;
-  }
-  const kdParsed = parseGermanDate(AppState.kurs.datum);
-  if (!kdParsed) {
-    alert("Bitte ein gültiges Kursdatum angeben.");
-    return;
-  }
 
-  // Fristen-Check
-  const pruefD = (AppState.kurs.ist_mehrtaegig && AppState.kurs.end_datum) ? parseGermanDate(AppState.kurs.end_datum) : kdParsed;
-  const warns = pruefeKursdatumPlausibilitaet(pruefD);
-  const gesperrt = warns.find(w => w.level === "gesperrt");
-  if (gesperrt) {
-    alert(`⛔ ${gesperrt.titel}:\n\n${gesperrt.nachricht}\n\nEin Export ist nicht möglich.`);
-    return;
-  }
+  let dateiname = "";
 
-  const vorstandWarn = warns.find(w => w.level === "vorstand");
-  if (vorstandWarn) {
-    if (!confirm(`⚠️ ${vorstandWarn.titel}:\n\n${vorstandWarn.nachricht}\n\nMöchtest du die Abrechnung zur Genehmigung beim Vorstand einreichen?`)) {
+  if (isBesorgung) {
+    if (!AppState.besorgung.anlass.trim()) {
+      alert("Bitte den Anlass / die Veranstaltung angeben.");
       return;
     }
+    if (!AppState.besorgung.zweck.trim()) {
+      alert("Bitte den Verwendungszweck der Besorgung angeben.");
+      return;
+    }
+    const bDate = parseGermanDate(AppState.besorgung.datum);
+    if (!bDate) {
+      alert("Bitte ein gültiges Datum der Veranstaltung / Besorgung angeben.");
+      return;
+    }
+    if (AppState.belege.length === 0) {
+      alert("Bitte mindestens einen Beleg bzw. eine Quittung erfassen.");
+      return;
+    }
+
+    const warns = pruefeBesorgungDatumPlausibilitaet(bDate);
+    const gesperrt = warns.find(w => w.level === "gesperrt");
+    if (gesperrt) {
+      alert(`⛔ ${gesperrt.titel}:\n\n${gesperrt.nachricht}\n\nEin Export ist nicht möglich.`);
+      return;
+    }
+
+    dateiname = generiereDateiname(AppState.besorgung.datum, AppState.besorgung.anlass, AppState.stamm.leiter, AppState.besorgung.id, "besorgung");
+  } else {
+    // Kurs
+    if (!AppState.kurs.id.trim()) {
+      alert("Bitte eine Kurs-ID angeben.");
+      return;
+    }
+    if (!AppState.kurs.titel.trim()) {
+      alert("Bitte den Kurstitel angeben.");
+      return;
+    }
+    const kdParsed = parseGermanDate(AppState.kurs.datum);
+    if (!kdParsed) {
+      alert("Bitte ein gültiges Kursdatum angeben.");
+      return;
+    }
+
+    const pruefD = (AppState.kurs.ist_mehrtaegig && AppState.kurs.end_datum) ? parseGermanDate(AppState.kurs.end_datum) : kdParsed;
+    const warns = pruefeKursdatumPlausibilitaet(pruefD);
+    const gesperrt = warns.find(w => w.level === "gesperrt");
+    if (gesperrt) {
+      alert(`⛔ ${gesperrt.titel}:\n\n${gesperrt.nachricht}\n\nEin Export ist nicht möglich.`);
+      return;
+    }
+
+    const vorstandWarn = warns.find(w => w.level === "vorstand");
+    if (vorstandWarn) {
+      if (!confirm(`⚠️ ${vorstandWarn.titel}:\n\n${vorstandWarn.nachricht}\n\nMöchtest du die Abrechnung zur Genehmigung beim Vorstand einreichen?`)) {
+        return;
+      }
+    }
+
+    dateiname = generiereDateiname(AppState.kurs.datum, AppState.kurs.titel, AppState.stamm.leiter, AppState.kurs.id, "kurs");
   }
 
   const btn = document.getElementById('btnExportPdf');
@@ -485,8 +675,13 @@ async function starteExportProzess() {
   btn.textContent = "⏳ PDF wird erstellt & Belege eingebettet...";
 
   try {
-    const pdfBytes = await erzeugeAbrechnungPDF(AppState.stamm, AppState.kurs, AppState.belege);
-    const dateiname = generiereDateiname(AppState.kurs.datum, AppState.kurs.titel, AppState.stamm.leiter, AppState.kurs.id);
+    const pdfBytes = await erzeugeAbrechnungPDF(
+      AppState.stamm,
+      AppState.kurs,
+      AppState.belege,
+      AppState.modus,
+      AppState.besorgung
+    );
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
 
     btn.disabled = false;
@@ -504,7 +699,22 @@ async function starteExportProzess() {
 // Erfolgs-Modal mit Download & Sendefunktion
 function oeffneErfolgsModal(blob, dateiname) {
   const modal = document.getElementById('modalErfolg');
-  const summen = berechneSummen(AppState.kurs.dauer, AppState.stamm.satz, AppState.belege);
+  const isBesorgung = (AppState.modus === 'besorgung');
+
+  const summen = isBesorgung
+    ? {
+        unterrichtDauer: 0,
+        vorbereitungDauer: 0,
+        dauer: 0,
+        satz: 0,
+        unterrichtHonorar: 0,
+        vorbereitungHonorar: 0,
+        honorar: 0,
+        auslagen: (AppState.belege || []).reduce((acc, b) => acc + (parseFloat(b.betrag) || 0.0), 0.0),
+        gesamt: (AppState.belege || []).reduce((acc, b) => acc + (parseFloat(b.betrag) || 0.0), 0.0)
+      }
+    : berechneSummen(AppState.kurs.dauer, AppState.stamm.satz, AppState.belege);
+
   document.getElementById('lblModalDateiname').textContent = dateiname;
 
   const downloadUrl = URL.createObjectURL(blob);
@@ -514,21 +724,32 @@ function oeffneErfolgsModal(blob, dateiname) {
 
   // Sendefunktion konfigurieren
   const btnShare = document.getElementById('btnModalShare');
-  const emailBetreff = encodeURIComponent(`Abrechnung ${AppState.kurs.id} - ${AppState.stamm.leiter}`);
-  const emailBody = encodeURIComponent(
-    `Hallo Vorstand,\n\nanbei sende ich meine Abrechnung für den Kurs "${AppState.kurs.titel}" (${summen.dauer.toFixed(2)} Stunden, Gesamtauszahlung: ${summen.gesamt.toFixed(2)} €).\n\nKurs-ID: ${AppState.kurs.id}\nLeiter: ${AppState.stamm.leiter}\n\nViele Grüße,\n${AppState.stamm.leiter}`
-  );
+
+  let emailBetreff = "";
+  let emailBody = "";
+
+  if (isBesorgung) {
+    emailBetreff = encodeURIComponent(`Auslagenerstattung ${AppState.besorgung.id} - ${AppState.stamm.leiter}`);
+    emailBody = encodeURIComponent(
+      `Hallo Vorstand,\n\nanbei sende ich meine Auslagenerstattung für "${AppState.besorgung.anlass}" (${AppState.besorgung.zweck}, Gesamterstattung: ${summen.gesamt.toFixed(2)} €).\n\nReferenz: ${AppState.besorgung.id}\nAntragsteller: ${AppState.stamm.leiter}\n\nViele Grüße,\n${AppState.stamm.leiter}`
+    );
+  } else {
+    emailBetreff = encodeURIComponent(`Abrechnung ${AppState.kurs.id} - ${AppState.stamm.leiter}`);
+    emailBody = encodeURIComponent(
+      `Hallo Vorstand,\n\nanbei sende ich meine Abrechnung für den Kurs "${AppState.kurs.titel}" (${summen.dauer.toFixed(2)} Stunden inkl. Vorbereitung, Gesamtauszahlung: ${summen.gesamt.toFixed(2)} €).\n\nKurs-ID: ${AppState.kurs.id}\nLeiter: ${AppState.stamm.leiter}\n\nViele Grüße,\n${AppState.stamm.leiter}`
+    );
+  }
+
   const mailtoLink = `mailto:${VEREIN_EMAIL}?subject=${emailBetreff}&body=${emailBody}`;
 
   btnShare.onclick = async () => {
     const file = new File([blob], dateiname, { type: 'application/pdf' });
-    // Prüfen, ob navigator.share mit Dateien unterstützt wird (Smartphones)
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({
           files: [file],
-          title: `Abrechnung ${AppState.kurs.id}`,
-          text: `Abrechnung für Kurs "${AppState.kurs.titel}" von ${AppState.stamm.leiter}`
+          title: isBesorgung ? `Auslagenerstattung ${AppState.besorgung.id}` : `Abrechnung ${AppState.kurs.id}`,
+          text: isBesorgung ? `Auslagen für "${AppState.besorgung.anlass}" von ${AppState.stamm.leiter}` : `Abrechnung für Kurs "${AppState.kurs.titel}" von ${AppState.stamm.leiter}`
         });
       } catch (e) {
         if (e.name !== 'AbortError') {
@@ -536,7 +757,6 @@ function oeffneErfolgsModal(blob, dateiname) {
         }
       }
     } else {
-      // Fallback für Desktop-PCs: Mailprogramm öffnen
       window.location.href = mailtoLink;
     }
   };

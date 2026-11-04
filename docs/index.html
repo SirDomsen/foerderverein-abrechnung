@@ -40,6 +40,19 @@
     <!-- LINKE SPALTE: EINGABEMASKE -->
     <section class="space-y-4">
 
+      <!-- MODUS-AUSWAHL: KURS ODER VERANSTALTUNG/BESORGUNG -->
+      <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+        <label class="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Abrechnungs-Art:</label>
+        <div class="grid grid-cols-2 gap-2">
+          <button type="button" id="tabModusKurs" class="py-2.5 px-3 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-1.5 transition border-2 border-[#1e3d59] bg-[#1e3d59] text-white shadow-sm">
+            <span>🎓</span> Kurs / AG
+          </button>
+          <button type="button" id="tabModusBesorgung" class="py-2.5 px-3 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-1.5 transition border-2 border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100">
+            <span>🎪</span> Veranstaltung / Besorgung
+          </button>
+        </div>
+      </div>
+
       <!-- 1. Stammdaten -->
       <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <h2 class="text-sm font-bold text-[#1e3d59] mb-3 flex items-center gap-1.5">
@@ -48,7 +61,7 @@
 
         <div class="space-y-3">
           <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1">Name des Kursleiters / Auftragnehmers:</label>
+            <label id="lblPersonName" class="block text-xs font-semibold text-slate-600 mb-1">Name des Kursleiters / Antragstellers:</label>
             <input type="text" id="inLeiter" placeholder="z. B. Maria Musterfrau" class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3d59]">
           </div>
 
@@ -66,31 +79,31 @@
             <label class="block text-xs font-semibold text-slate-600 mb-1">IBAN (deutsches Girokonto, 22 Stellen):</label>
             <input type="text" id="inIban" placeholder="DE89 3704 0044 0532 0130 00" class="w-full text-sm p-2 font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1e3d59]">
           </div>
-
-          <!-- Stundensatz & Admin PIN -->
-          <div class="flex justify-between items-center p-2.5 bg-slate-100 border border-slate-200 rounded-lg mt-2">
-            <div>
-              <span class="block text-[11px] font-semibold text-slate-500">Vergütungssatz (fest):</span>
-              <span id="lblStundensatz" class="text-sm font-bold text-slate-800">💰 21,00 € / Stunde</span>
-            </div>
-            <button id="btnAdminSettings" title="Admin-Einstellungen (Vorstand)" class="p-2 bg-slate-200 hover:bg-slate-300 rounded-lg text-slate-700 text-sm transition">
-              ⚙️
-            </button>
-          </div>
         </div>
       </div>
 
-      <!-- 2. Kursdaten -->
-      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+      <!-- 2. KURS-DATEN (wird angezeigt wenn Modus === 'kurs') -->
+      <div id="boxSectionKurs" class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <h2 class="text-sm font-bold text-[#d97706] mb-3 flex items-center gap-1.5">
           <span>🏫</span> 2. Kursdaten (dieser Vorgang)
         </h2>
 
         <div class="space-y-3">
+          <!-- Stundensatz & Admin PIN -->
+          <div class="flex justify-between items-center p-2.5 bg-amber-50 border border-amber-200 rounded-lg">
+            <div>
+              <span class="block text-[11px] font-semibold text-amber-800">Vergütungssatz (fest):</span>
+              <span id="lblStundensatz" class="text-sm font-bold text-amber-950">💰 21,00 € / Stunde</span>
+            </div>
+            <button type="button" id="btnAdminSettings" title="Admin-Einstellungen (Vorstand)" class="p-2 bg-amber-200 hover:bg-amber-300 rounded-lg text-amber-900 text-sm transition">
+              ⚙️
+            </button>
+          </div>
+
           <div>
             <div class="flex justify-between items-center mb-1">
               <label class="text-xs font-semibold text-slate-600">Kurs-ID / Buchungs-Referenz:</label>
-              <button id="btnSuggestId" class="text-[11px] bg-amber-500 hover:bg-amber-600 text-white font-semibold py-0.5 px-2 rounded transition">⚡ Neu vorschlagen</button>
+              <button type="button" id="btnSuggestId" class="text-[11px] bg-amber-500 hover:bg-amber-600 text-white font-semibold py-0.5 px-2 rounded transition">⚡ Neu vorschlagen</button>
             </div>
             <input type="text" id="inKursId" placeholder="z. B. SJ2627-SCHACH-01" class="w-full text-sm p-2 font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d97706]">
           </div>
@@ -142,6 +155,50 @@
             <label class="block text-xs font-semibold text-slate-600 mb-1">Notizen / Bemerkungen des Kursleiters (optional):</label>
             <textarea id="inKursNotizen" rows="2" placeholder="z. B. Besonderheiten, Vertretung, Projektinhalte, Raumänderung..." class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#d97706]"></textarea>
           </div>
+        </div>
+      </div>
+
+      <!-- 2. VERANSTALTUNG / BESORGUNG (wird angezeigt wenn Modus === 'besorgung') -->
+      <div id="boxSectionBesorgung" class="hidden bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+        <h2 class="text-sm font-bold text-teal-800 mb-3 flex items-center gap-1.5">
+          <span>🎪</span> 2. Veranstaltungs- & Besorgungsdaten
+        </h2>
+
+        <div class="p-2.5 bg-teal-50 border border-teal-200 rounded-lg text-xs text-teal-900 space-y-1">
+          <p class="font-bold flex items-center gap-1 text-teal-950">
+            <span>ℹ️</span> Reine Material- / Auslagenerstattung
+          </p>
+          <p class="text-[11px] leading-relaxed text-teal-800">
+            Abrechnungszeitraum: Das gesamte laufende Schuljahr (Tag nach Sommerferien bis letzter Schultag vor den neuen Sommerferien). Zeitaufwand wird hier keiner vergütet.
+          </p>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="text-xs font-semibold text-slate-600">Referenz / Beleg-ID:</label>
+            <button type="button" id="btnSuggestBesorgungId" class="text-[11px] bg-teal-600 hover:bg-teal-700 text-white font-semibold py-0.5 px-2 rounded transition">⚡ Neu vorschlagen</button>
+          </div>
+          <input type="text" id="inBesorgungId" placeholder="z. B. SJ2627-BES-WEIHNACHT" class="w-full text-sm p-2 font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Anlass / Veranstaltung:</label>
+          <input type="text" id="inBesorgungAnlass" placeholder="z. B. Weihnachtsmarkt 2026, Schulfest oder Einschulung" class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Verwendungszweck (Was wurde wofür besorgt?):</label>
+          <input type="text" id="inBesorgungZweck" placeholder="z. B. Getränke, Becher und Servietten besorgt" class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Datum der Veranstaltung / Besorgung (TT.MM.JJJJ):</label>
+          <input type="text" id="inBesorgungDatum" placeholder="z. B. 04.11.2026" class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Notizen / Bemerkungen des Antragstellers (optional):</label>
+          <textarea id="inBesorgungNotizen" rows="2" placeholder="z. B. Absprache mit Vorstand, genehmigtes Budget..." class="w-full text-sm p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600"></textarea>
         </div>
       </div>
 
@@ -246,7 +303,7 @@
         <div class="p-3 bg-white border border-slate-200 rounded-lg mt-3 space-y-2">
           <span class="text-[11px] font-bold text-slate-400 tracking-wider block">ABRECHNUNGS-POSTEN</span>
 
-          <div class="flex justify-between items-center text-xs">
+          <div id="sumBoxHonorar" class="flex justify-between items-center text-xs">
             <div>
               <span class="font-semibold text-slate-800 block">Aufwandsentschädigung</span>
               <span id="sumHonorarDetail" class="text-[11px] text-slate-500">2.00 Std. × 21.00 €/h</span>

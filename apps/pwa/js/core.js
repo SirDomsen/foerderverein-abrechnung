@@ -194,13 +194,24 @@ function generiereKursIdVorschlag(kursTitel, kursDatumStr) {
   return `${sj}-${kuerzel}-01`;
 }
 
-// Dateiname nach Kassenwart-Schema
-function generiereDateiname(kursDatumStr, kursTitel, kursleiter, kursId) {
-  const d = parseGermanDate(kursDatumStr) || new Date();
+// Besorgungs-ID Vorschlag
+function generiereBesorgungIdVorschlag(anlass, datumStr) {
+  const d = parseGermanDate(datumStr) || new Date();
+  const sj = ermittleSchuljahrDetails(d).code;
+  const clean = (anlass || "").toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const kuerzel = clean.slice(0, 8) || "BESORGUNG";
+  return `${sj}-BES-${kuerzel}`;
+}
+
+// Dateiname nach Kassenwart-Schema (universell für Kurs und Besorgung)
+function generiereDateiname(datumStr, titel, leiter, id, modus = "kurs") {
+  const d = parseGermanDate(datumStr) || new Date();
   const dStr = formatDateISO(d);
-  const cleanKid = (kursId || "KURS").toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
-  const cleanLeiter = (kursleiter || "Abrechnung").replace(/[^a-zA-Z0-9äöüÄÖÜß_-]/g, '_').slice(0, 25);
-  return `Abrechnung_${cleanKid}_${dStr}_${cleanLeiter}.pdf`;
+  const fallback = modus === "besorgung" ? "BESORGUNG" : "KURS";
+  const cleanKid = (id || fallback).toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+  const cleanLeiter = (leiter || "Abrechnung").replace(/[^a-zA-Z0-9äöüÄÖÜß_-]/g, '_').slice(0, 25);
+  const praefix = modus === "besorgung" ? "Auslagenerstattung" : "Abrechnung";
+  return `${praefix}_${cleanKid}_${dStr}_${cleanLeiter}.pdf`;
 }
 
 // IBAN Modulo-97 Prüfung (ISO 7064)
@@ -346,6 +357,68 @@ function pruefeBelegPlausibilitaet(belegDatum, kursDatum) {
     }
   }
 
+  return { ok: true, status: "ok", msg: "" };
+}
+
+// Fristenprüfung für Besorgungen/Veranstaltungen: Gesamtes laufendes Schuljahr!
+function pruefeBesorgungDatumPlausibilitaet(besorgungsDatum, heute = new Date()) {
+  const warnungen = [];
+  const bSj = ermittleSchuljahrDetails(besorgungsDatum);
+  const aktSj = ermittleSchuljahrDetails(heute);
+
+  // 1. Sperre: Besorgung lag in vergangenem Schuljahr
+  if (besorgungsDatum < heute) {
+    if (bSj.code !== aktSj.code && besorgungsDatum < aktSj.start) {
+      warnungen.push({
+        level: "gesperrt",
+        titel: "Frist endgültig abgelaufen (Schuljahr beendet)",
+        nachricht: `Die Besorgung (${formatDateGerman(besorgungsDatum)}) fand im abgelaufenen Schuljahr (${bSj.code}) statt. Die Einreichungsfrist endete vor Beginn der Sommerferien. Erstattung ist gesperrt.`
+      });
+      return warnungen;
+    }
+
+    if (bSj.code === aktSj.code && heute > bSj.letzterSchultag) {
+      warnungen.push({
+        level: "gesperrt",
+        titel: "Frist endgültig abgelaufen (Kassenprüfung läuft)",
+        nachricht: `Die allerletzte Frist zur Einreichung für das Schuljahr (${bSj.code}) endete am ${formatDateGerman(bSj.letzterSchultag)}. Erstattung ist gesperrt.`
+      });
+      return warnungen;
+    }
+  }
+
+  // Zukünftiges Schuljahr
+  if (besorgungsDatum > aktSj.ende) {
+    warnungen.push({
+      level: "gesperrt",
+      titel: "Datum im zukünftigen Schuljahr",
+      nachricht: `Das Datum liegt im zukünftigen Schuljahr (${bSj.code}). Auslagen können erst im jeweiligen Schuljahr eingereicht werden.`
+    });
+    return warnungen;
+  }
+
+  return warnungen;
+}
+
+// Belegprüfung für Besorgungen (im gesamten Schuljahr gültig)
+function pruefeBesorgungBelegPlausibilitaet(belegDatum, besorgungsDatum) {
+  const d = besorgungsDatum || new Date();
+  const sj = ermittleSchuljahrDetails(d);
+  if (belegDatum > sj.letzterSchultag) {
+    return {
+      ok: false,
+      status: "nachlauf",
+      msg: `Belegdatum (${formatDateGerman(belegDatum)}) liegt nach dem Schuljahresende (${formatDateGerman(sj.letzterSchultag)}).`
+    };
+  }
+  const pufferStart = addDays(sj.start, -28);
+  if (belegDatum < pufferStart) {
+    return {
+      ok: false,
+      status: "alt",
+      msg: `Der Beleg (${formatDateGerman(belegDatum)}) liegt vor dem Beginn des Schuljahres (${sj.code}).`
+    };
+  }
   return { ok: true, status: "ok", msg: "" };
 }
 
